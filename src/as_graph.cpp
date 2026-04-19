@@ -237,3 +237,309 @@ size_t ASGraph::getNumPeerEdges() const {
     }
     return count / 2;  // Each peer relationship counted twice
 }
+
+/**
+ * Flatten the graph into propagation ranks
+ * Rank 0 = ASes with no customers (edges)
+ * Rank N = providers of rank N-1 ASes
+ */
+void ASGraph::flattenGraph() {
+    std::cout << "Flattening graph into propagation ranks..." << std::endl;
+    
+    // Clear any existing ranks
+    propagation_ranks_.clear();
+    
+    // Reset all propagation ranks to -1 (unassigned)
+    for (auto& pair : ases_) {
+        pair.second->setPropagationRank(-1);
+    }
+    
+    // Find all ASes with no customers (rank 0)
+    std::vector<AS*> rank_0;
+    for (auto& pair : ases_) {
+        if (!pair.second->hasCustomers()) {
+            pair.second->setPropagationRank(0);
+            rank_0.push_back(pair.second.get());
+        }
+    }
+    
+    propagation_ranks_.push_back(rank_0);
+    std::cout << "Rank 0: " << rank_0.size() << " ASes" << std::endl;
+    
+    // Iteratively assign ranks going up the provider chain
+    int current_rank = 0;
+    while (true) {
+        std::vector<AS*> next_rank;
+        
+        // For each AS at current rank, look at their providers
+        for (AS* as : propagation_ranks_[current_rank]) {
+            for (AS* provider : as->getProviders()) {
+                // If provider hasn't been assigned a rank yet
+                if (provider->getPropagationRank() == -1) {
+                    provider->setPropagationRank(current_rank + 1);
+                    next_rank.push_back(provider);
+                }
+            }
+        }
+        
+        // Remove duplicates (an AS might be provider to multiple rank N ASes)
+        std::sort(next_rank.begin(), next_rank.end());
+        next_rank.erase(std::unique(next_rank.begin(), next_rank.end()), next_rank.end());
+        
+        if (next_rank.empty()) {
+            break;  // No more ranks to assign
+        }
+        
+        propagation_ranks_.push_back(next_rank);
+        current_rank++;
+        std::cout << "Rank " << current_rank << ": " << next_rank.size() << " ASes" << std::endl;
+    }
+    
+    std::cout << "Graph flattening complete! Total ranks: " << propagation_ranks_.size() << std::endl;
+    
+    // Verify all ASes got a rank (except disconnected ones)
+    int unranked = 0;
+    for (const auto& pair : ases_) {
+        if (pair.second->getPropagationRank() == -1) {
+            unranked++;
+        }
+    }
+    
+    if (unranked > 0) {
+        std::cout << "Warning: " << unranked << " ASes have no rank (disconnected from graph)" << std::endl;
+    }
+}
+
+/**
+ * Seed an announcement at a specific AS
+ * If the AS doesn't exist, create it (origin ASes may not be in CAIDA data)
+ */
+void ASGraph::seedAnnouncement(uint32_t asn, const Announcement& ann) {
+    // Get or create the AS (origin ASes might not be in CAIDA topology)
+    AS* as = getOrCreateAS(asn);
+    
+    // Make sure it has a policy
+    if (!as->getPolicy()) {
+        as->setPolicy(std::make_unique<BGP>());
+    }
+    
+    // Seed the announcement
+    as->getPolicy()->seedAnnouncement(ann);
+}
+
+/**
+ * Set policy for a specific AS
+ */
+void ASGraph::setASPolicy(uint32_t asn, std::unique_ptr<Policy> policy) {
+    AS* as = getAS(asn);
+    if (as) {
+        as->setPolicy(std::move(policy));
+    }
+}
+
+/**
+ * Propagate announcements UP the graph (to providers)
+ * Goes from rank 0 to highest rank
+ */
+void ASGraph::propagateUp() {
+    // ✅ Process rank 0 first
+    for (AS* as : propagation_ranks_[0]) {
+        as->processReceivedAnnouncements();
+        as->clearReceivedQueue();
+    }
+
+    for (size_t rank = 0; rank < propagation_ranks_.size(); ++rank) {
+        // Send phase
+        for (AS* as : propagation_ranks_[rank]) {
+            as->sendAnnouncementsToProviders();
+        }
+        
+        // Process next rank
+        if (rank + 1 < propagation_ranks_.size()) {
+            for (AS* as : propagation_ranks_[rank + 1]) {
+                as->processReceivedAnnouncements();
+                as->clearReceivedQueue();
+            }
+        }
+    }
+}
+
+/**
+ * Propagate announcements ACROSS the graph (to peers)
+ * Only one hop - all ASes send, then all ASes process
+ */
+void ASGraph::propagateAcross() {
+    // Send phase: ALL ASes send to peers simultaneously
+    for (const auto& pair : ases_) {
+        pair.second->sendAnnouncementsToPeers();
+    }
+    
+    // Process phase: ALL ASes process what they received
+    for (const auto& pair : ases_) {
+        pair.second->processReceivedAnnouncements();
+        pair.second->clearReceivedQueue();
+    }
+}
+
+/**
+ * Propagate announcements DOWN the graph (to customers)
+ * Goes from highest rank to rank 0
+ */
+void ASGraph::propagateDown() {
+    for (int rank = propagation_ranks_.size() - 1; rank >= 0; --rank) {
+        // Send phase
+        for (AS* as : propagation_ranks_[rank]) {
+            as->sendAnnouncementsToCustomers();
+        }
+
+        // Process next rank down
+        if (rank - 1 >= 0) {
+            for (AS* as : propagation_ranks_[rank - 1]) {
+                as->processReceivedAnnouncements();
+                as->clearReceivedQueue();
+            }
+        }
+    }
+}
+
+/**
+ * Propagate all announcements through the entire network
+ * Three phases: UP -> ACROSS -> DOWN
+ */
+void ASGraph::propagateAnnouncements() {
+    std::cout << "Propagating announcements..." << std::endl;
+    
+    std::cout << "Phase 1: Propagating UP to providers..." << std::endl;
+    propagateUp();
+    
+    std::cout << "Phase 2: Propagating ACROSS to peers..." << std::endl;
+    propagateAcross();
+    
+    std::cout << "Phase 3: Propagating DOWN to customers..." << std::endl;
+    propagateDown();
+    
+    std::cout << "Propagation complete!" << std::endl;
+}
+
+/**
+ * Load ROV ASes from file
+ * Format: one ASN per line
+ */
+void ASGraph::loadROVASes(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Warning: Could not open ROV file " << filename << std::endl;
+        return;
+    }
+    
+    std::string line;
+    int count = 0;
+    
+    while (std::getline(file, line)) {
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        
+        try {
+            uint32_t asn = std::stoul(line);
+            AS* as = getAS(asn);
+            
+            if (as) {
+                as->setPolicy(std::make_unique<ROV>());
+                count++;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error parsing ROV ASN: " << line << std::endl;
+        }
+    }
+    
+    file.close();
+    std::cout << "Loaded " << count << " ROV ASes" << std::endl;
+}
+
+/**
+ * Load announcements from CSV
+ * Format: asn,prefix,rov_invalid
+ */
+void ASGraph::loadAnnouncements(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open announcements file " << filename << std::endl;
+        return;
+    }
+    
+    std::string line;
+    int count = 0;
+    
+    // Skip header if present
+    std::getline(file, line);
+    
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        
+        std::istringstream iss(line);
+        std::string asn_str, prefix, rov_str;
+        
+        if (!std::getline(iss, asn_str, ',')) continue;
+        if (!std::getline(iss, prefix, ',')) continue;
+        if (!std::getline(iss, rov_str, ',')) continue;
+        
+        try {
+            uint32_t asn = std::stoul(asn_str);
+            bool rov_invalid = (rov_str == "1" || rov_str == "true" || rov_str == "True");
+            
+            // Create origin announcement
+            std::vector<uint32_t> as_path = {asn};
+            Announcement ann(prefix, as_path, asn, Relationship::ORIGIN, rov_invalid);
+            
+            seedAnnouncement(asn, ann);
+            count++;
+            
+        } catch (const std::exception& e) {
+            std::cerr << "Error parsing announcement: " << line << std::endl;
+        }
+    }
+    
+    file.close();
+    std::cout << "Loaded " << count << " announcements" << std::endl;
+    
+    // Re-flatten graph in case new ASes were created during seeding
+    std::cout << "Re-flattening graph to include origin ASes..." << std::endl;
+    flattenGraph();
+}
+
+/**
+ * Export all local RIBs to CSV
+ * Format: asn,prefix,as_path
+ */
+void ASGraph::exportToCSV(const std::string& filename) const {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open output file " << filename << std::endl;
+        return;
+    }
+    
+    // Write header
+    file << "asn,prefix,as_path" << std::endl;
+    
+    // Write each AS's local RIB
+    for (const auto& pair : ases_) {
+        uint32_t asn = pair.first;
+        const AS* as = pair.second.get();
+        
+        if (!as->getPolicy()) continue;
+        
+        const auto& local_rib = as->getPolicy()->getLocalRib();
+        
+        for (const auto& rib_entry : local_rib) {
+            const std::string& prefix = rib_entry.first;
+            const Announcement& ann = rib_entry.second;
+            
+            file << asn << "," << prefix << "," << ann.asPathToString() << std::endl;
+        }
+    }
+    
+    file.close();
+    std::cout << "Exported local RIBs to " << filename << std::endl;
+}

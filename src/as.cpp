@@ -1,4 +1,5 @@
 #include "as.hpp"
+#include "announcement.hpp"
 #include <algorithm>
 
 /**
@@ -82,4 +83,96 @@ bool AS::isCustomer(const AS* other) const {
  */
 bool AS::isPeer(const AS* other) const {
     return std::find(peers_.begin(), peers_.end(), other) != peers_.end();
+}
+
+/**
+ * Send all announcements in local RIB to providers
+ * Providers receive announcements with CUSTOMER relationship
+ */
+void AS::sendAnnouncementsToProviders() {
+    if (!policy_) return;
+    
+    const auto& local_rib = policy_->getLocalRib();
+    
+    for (const auto& pair : local_rib) {
+        const Announcement& ann = pair.second;
+        
+        for (AS* provider : providers_) {
+            sendAnnouncementToNeighbor(provider, ann, Relationship::CUSTOMER);
+        }
+    }
+}
+
+/**
+ * Send all announcements in local RIB to customers
+ * Customers receive announcements with PROVIDER relationship
+ */
+void AS::sendAnnouncementsToCustomers() {
+    if (!policy_) return;
+    
+    const auto& local_rib = policy_->getLocalRib();
+    
+    for (const auto& pair : local_rib) {
+        const Announcement& ann = pair.second;
+        
+        for (AS* customer : customers_) {
+            sendAnnouncementToNeighbor(customer, ann, Relationship::PROVIDER);
+        }
+    }
+}
+
+/**
+ * Send announcements to peers
+ * Only send announcements received from customers (export policy)
+ * Peers receive announcements with PEER relationship
+ */
+void AS::sendAnnouncementsToPeers() {
+    if (!policy_) return;
+    
+    const auto& local_rib = policy_->getLocalRib();
+    
+    for (const auto& pair : local_rib) {
+        const Announcement& ann = pair.second;
+        
+        // Only send to peers if we learned it from a customer or it's our origin
+        if (ann.getRecvRelationship() == Relationship::CUSTOMER ||
+            ann.getRecvRelationship() == Relationship::ORIGIN) {
+            
+            for (AS* peer : peers_) {
+                sendAnnouncementToNeighbor(peer, ann, Relationship::PEER);
+            }
+        }
+    }
+}
+
+/**
+ * Helper: Send a single announcement to a neighbor
+ * Creates a modified copy with new next hop and relationship
+ */
+void AS::sendAnnouncementToNeighbor(AS* neighbor, const Announcement& ann, Relationship recv_rel) {
+    if (!neighbor || !neighbor->getPolicy()) return;
+
+    Announcement new_ann = ann;
+
+    new_ann.setNextHopASN(asn_);
+    new_ann.setRecvRelationship(recv_rel);
+
+    neighbor->getPolicy()->receiveAnnouncement(new_ann);
+}
+
+/**
+ * Process all announcements in the received queue
+ * Updates local RIB based on BGP selection
+ */
+void AS::processReceivedAnnouncements() {
+    if (!policy_) return;
+    policy_->processAnnouncements(this);
+}
+
+/**
+ * Clear the received queue after processing
+ */
+void AS::clearReceivedQueue() {
+    if (!policy_) return;
+    policy_->clearReceivedQueue();
 }

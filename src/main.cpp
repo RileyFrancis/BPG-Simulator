@@ -1,115 +1,72 @@
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 #include <iostream>
-
-struct AS {
-    u_int32_t asn;
-    std::unordered_set<u_int32_t> providers;
-    std::unordered_set<u_int32_t> customers;
-    std::unordered_set<u_int32_t> peers;
-    
-    AS(u_int32_t asn) : asn(asn) {}
-};
-
-class ASGraph {
-private:
-    std::unordered_map<u_int32_t, AS*> ases;
-    
-    // Get or create an AS node
-    AS* getOrCreateAS(u_int32_t asn) {
-        if (ases.find(asn) == ases.end()) {
-            ases[asn] = new AS(asn);
-        }
-        return ases[asn];
-    }
-    
-public:
-    bool parseCAIDAFile(const std::string& filename) {
-        std::ifstream file(filename);
-        if (!file.is_open()) {
-            std::cerr << "Error opening file: " << filename << std::endl;
-            return false;
-        }
-        
-        std::string line;
-        while (std::getline(file, line)) {
-            // Skip comments and empty lines
-            if (line.empty() || line[0] == '#') {
-                continue;
-            }
-            
-            // Parse the line: provider|customer|relationship|source
-            std::istringstream iss(line);
-            std::string provider_str, customer_str, rel_str, source;
-            
-            if (!std::getline(iss, provider_str, '|') ||
-                !std::getline(iss, customer_str, '|') ||
-                !std::getline(iss, rel_str, '|') ||
-                !std::getline(iss, source, '|')) {
-                std::cerr << "Malformed line: " << line << std::endl;
-                continue;
-            }
-            
-            u_int32_t provider_asn = std::stoul(provider_str);
-            u_int32_t customer_asn = std::stoul(customer_str);
-            int relationship = std::stoi(rel_str);
-            
-            // Get or create both ASes
-            AS* provider = getOrCreateAS(provider_asn);
-            AS* customer = getOrCreateAS(customer_asn);
-            
-            if (relationship == 0) {
-                // Provider-to-customer relationship
-                provider->customers.insert(customer_asn);
-                customer->providers.insert(provider_asn);
-            } 
-            else if (relationship == -1) {
-                // Peer-to-peer relationship (bidirectional)
-                provider->peers.insert(customer_asn);
-                customer->peers.insert(provider_asn);
-            }
-        }
-        
-        file.close();
-        return true;
-    }
-    
-    // Check for cycles in provider-customer relationships
-    bool hasCycles() {
-        // TODO: Implement cycle detection (DFS-based)
-        // Return true if cycle found, false otherwise
-        return false;
-    }
-    
-    ~ASGraph() {
-        for (auto& pair : ases) {
-            delete pair.second;
-        }
-    }
-};
-
+#include <string>
+#include <memory>
+#include "as_graph.hpp"
+#include "policy.hpp"
 
 int main(int argc, char* argv[]) {
+    // Parse command line arguments
+    if (argc < 4) {
+        std::cerr << "Usage: " << argv[0] 
+                  << " <caida_file> <announcements_csv> <output_csv> [rov_asns_file]" 
+                  << std::endl;
+        return 1;
+    }
+    
+    std::string caida_file = argv[1];
+    std::string announcements_file = argv[2];
+    std::string output_file = argv[3];
+    std::string rov_file = (argc >= 5) ? argv[4] : "";
+    
+    std::cout << "========================================" << std::endl;
+    std::cout << "BGP Simulator" << std::endl;
+    std::cout << "========================================" << std::endl;
+    
+    // Step 1: Build the AS graph from CAIDA data
     ASGraph graph;
     
-    // Parse the CAIDA file
-    if (!graph.parseCAIDAFile("bench/many/CAIDAASGraphCollector_2025.10.15.txt")) {
+    std::cout << "\n[Step 1] Building AS Graph..." << std::endl;
+    if (!graph.buildFromCAIDAFile(caida_file)) {
+        std::cerr << "Failed to build AS graph" << std::endl;
         return 1;
     }
     
-    // Check for cycles
-    if (graph.hasCycles()) {
-        std::cerr << "Error: Cycle detected in AS relationships!" << std::endl;
-        return 1;
+    // Step 2: Flatten the graph for propagation
+    std::cout << "\n[Step 2] Flattening graph..." << std::endl;
+    graph.flattenGraph();
+    
+    // Step 3: Set default BGP policy for all ASes
+    std::cout << "\n[Step 3] Setting default BGP policies..." << std::endl;
+    for (const auto& pair : graph.getAllASes()) {
+        uint32_t asn = pair.first;
+        graph.setASPolicy(asn, std::make_unique<BGP>());
+    }
+    std::cout << "Set BGP policy for " << graph.getNumASes() << " ASes" << std::endl;
+    
+    // Step 4: Load ROV ASes (if file provided)
+    if (!rov_file.empty()) {
+        std::cout << "\n[Step 4] Loading ROV ASes..." << std::endl;
+        graph.loadROVASes(rov_file);
+    } else {
+        std::cout << "\n[Step 4] No ROV file provided, skipping..." << std::endl;
     }
     
-    std::cout << "Graph loaded successfully!" << std::endl;
+    // Step 5: Load announcements
+    std::cout << "\n[Step 5] Loading announcements..." << std::endl;
+    graph.loadAnnouncements(announcements_file);
     
-    // Continue with announcement propagation...
+    // Step 6: Propagate announcements through the network
+    std::cout << "\n[Step 6] Propagating announcements..." << std::endl;
+    graph.propagateAnnouncements();
+    
+    // Step 7: Export results to CSV
+    std::cout << "\n[Step 7] Exporting results..." << std::endl;
+    graph.exportToCSV(output_file);
+    
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "Simulation complete!" << std::endl;
+    std::cout << "Results written to: " << output_file << std::endl;
+    std::cout << "========================================" << std::endl;
     
     return 0;
 }

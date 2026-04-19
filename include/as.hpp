@@ -47,6 +47,13 @@ public:
     bool isCustomer(const AS* other) const;
     bool isPeer(const AS* other) const;
     
+    // Announcement propagation methods
+    void sendAnnouncementsToProviders();
+    void sendAnnouncementsToCustomers();
+    void sendAnnouncementsToPeers();
+    void processReceivedAnnouncements();
+    void clearReceivedQueue();
+    
 private:
     uint32_t asn_;                              // Autonomous System Number (unique ID)
     int propagation_rank_;                      // Rank for graph flattening (-1 if unset)
@@ -56,4 +63,7 @@ private:
     std::vector<AS*> peers_;                    // List of peer ASes
     
     std::unique_ptr<Policy> policy_;            // Routing policy (BGP or ROV)
+    
+    // Helper: Send announcement to a neighbor with appropriate relationship
+    void sendAnnouncementToNeighbor(AS* neighbor, const Announcement& ann, Relationship recv_rel);
 };
