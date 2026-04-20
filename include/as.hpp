@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
+#include <algorithm>
 #include "policy.hpp"
 
 // Forward declaration
@@ -15,10 +16,10 @@ class Policy;
 class AS {
 public:
     // Constructor
-    explicit AS(uint32_t asn);
+    explicit AS(uint32_t asn) : asn_(asn), propagation_rank_(-1), policy_(nullptr) {}
     
     // Destructor
-    ~AS();
+    ~AS() = default;
     
     // Getters
     uint32_t getASN() const { return asn_; }
@@ -30,12 +31,26 @@ public:
     
     // Setters
     void setPropagationRank(int rank) { propagation_rank_ = rank; }
-    void setPolicy(std::unique_ptr<Policy> policy);
+    void setPolicy(std::unique_ptr<Policy> policy) { policy_ = std::move(policy); }
     
     // Relationship management
-    void addProvider(AS* provider);
-    void addCustomer(AS* customer);
-    void addPeer(AS* peer);
+    void addProvider(AS* provider) {
+        if (provider && std::find(providers_.begin(), providers_.end(), provider) == providers_.end()) {
+            providers_.push_back(provider);
+        }
+    }
+
+    void addCustomer(AS* customer) {
+        if (customer && std::find(customers_.begin(), customers_.end(), customer) == customers_.end()) {
+            customers_.push_back(customer);
+        }
+    }
+
+    void addPeer(AS* peer) {
+        if (peer && std::find(peers_.begin(), peers_.end(), peer) == peers_.end()) {
+            peers_.push_back(peer);
+        }
+    }
     
     // Check if AS has relationships
     bool hasProviders() const { return !providers_.empty(); }
@@ -43,9 +58,17 @@ public:
     bool hasPeers() const { return !peers_.empty(); }
     
     // Utility methods
-    bool isProvider(const AS* other) const;
-    bool isCustomer(const AS* other) const;
-    bool isPeer(const AS* other) const;
+    bool isProvider(const AS* other) const {
+        return std::find(providers_.begin(), providers_.end(), other) != providers_.end();
+    }
+
+    bool isCustomer(const AS* other) const {
+        return std::find(customers_.begin(), customers_.end(), other) != customers_.end();
+    }
+
+    bool isPeer(const AS* other) const {
+        return std::find(peers_.begin(), peers_.end(), other) != peers_.end();
+    }
     
 private:
     uint32_t asn_;                              // Autonomous System Number (unique ID)

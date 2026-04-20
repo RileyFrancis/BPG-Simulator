@@ -7,27 +7,45 @@ INCLUDE_DIR = include
 TEST_DIR = tests
 BUILD_DIR = build
 
-# Source files (matching your actual filenames)
-SOURCES = $(SRC_DIR)/as.cpp $(SRC_DIR)/as_graph.cpp $(SRC_DIR)/utils.cpp
-OBJECTS = $(SOURCES:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
+# Header files (for dependency tracking)
+HEADERS = $(INCLUDE_DIR)/as.hpp \
+          $(INCLUDE_DIR)/as_graph.hpp \
+          $(INCLUDE_DIR)/announcement.hpp \
+          $(INCLUDE_DIR)/policy.hpp
 
 # Create build directory if it doesn't exist
 $(shell mkdir -p $(BUILD_DIR))
-$(shell mkdir -p $(TEST_DIR))
-
-# Test executable
-test_graph: $(TEST_DIR)/test_graph.cpp $(BUILD_DIR)/as.o $(BUILD_DIR)/as_graph.o
-	$(CXX) $(CXXFLAGS) -o $(BUILD_DIR)/test_graph $(TEST_DIR)/test_graph.cpp $(BUILD_DIR)/as.o $(BUILD_DIR)/as_graph.o
 
 # Main program
-bgp_simulator: $(SRC_DIR)/main.cpp $(OBJECTS)
-	$(CXX) $(CXXFLAGS) -o bgp_simulator $(SRC_DIR)/main.cpp $(OBJECTS)
+bgp_simulator: $(SRC_DIR)/main.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD_DIR)/bgp_simulator $(SRC_DIR)/main.cpp
 
-# Pattern rule for object files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+# Test executables (header-only, no object files needed)
+test_graph: $(TEST_DIR)/test_graph.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD_DIR)/test_graph $(TEST_DIR)/test_graph.cpp
+
+test_announcement: $(TEST_DIR)/test_announcement.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD_DIR)/test_announcement $(TEST_DIR)/test_announcement.cpp
+
+# Convenience target to run all tests
+test: test_graph test_announcement
+	@echo "Running all tests..."
+	@echo ""
+	@echo "=== Graph Tests ==="
+	./$(BUILD_DIR)/test_graph
+	@echo ""
+	@echo "=== Announcement Tests ==="
+	./$(BUILD_DIR)/test_announcement
+
+# Run main program with bench/prefix data
+run_prefix: bgp_simulator
+	./$(BUILD_DIR)/bgp_simulator bench/prefix/CAIDAASGraphCollector_2025.10.15.txt
+
+# Run main program with bench/many data
+run_many: bgp_simulator
+	./$(BUILD_DIR)/bgp_simulator bench/many/CAIDAASGraphCollector_2025.10.15.txt
 
 clean:
-	rm -f $(BUILD_DIR)/*.o test_graph bgp_simulator
+	rm -rf $(BUILD_DIR)/*
 
-.PHONY: clean
+.PHONY: clean test run_prefix run_many
