@@ -3,11 +3,13 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <memory>
 #include <cstdint>
 #include <fstream>
 #include <sstream>
+#include <queue>
 #include "as.hpp"   
 
 /**
@@ -109,7 +111,7 @@ public:
         return false;
     }
     
-    // Graph statistics ============================
+    // Graph statistics
     size_t getNumASes() const { 
         return ases_.size(); 
     }
@@ -145,11 +147,157 @@ public:
         return as_ptr;
     }
 
-    void flattenGraph();
+    /**
+     * Flatten the graph by assigning propagation ranks
+     * 
+     * Algorithm from Section 3.3:
+     * 1. Find all ASes with no customers (rank 0 - the "edge" ASes)
+     * 2. For each AS at rank 0, assign all their providers rank 1
+     * 3. For each AS at rank 1, assign all their providers rank 2
+     * 4. Continue until all ASes have ranks (reaching ASes with no providers)
+     * 
+     * This creates a hierarchical structure where:
+     * - Rank 0: ASes with no customers (edges)
+     * - Higher ranks: Move up the provider chain
+     */
+    void flattenGraph() {
+        std::cout << "\nFlattening graph (assigning propagation ranks)..." << std::endl;
+        
+        // Clear existing rank structure
+        rank_structure_.clear();
+        
+        // Step 1: Find all ASes with no customers and assign rank 0
+        std::unordered_set<AS*> current_rank_set;
+        
+        for (auto& pair : ases_) {
+            AS* as = pair.second.get();
+            if (!as->hasCustomers()) {
+                as->setPropagationRank(0);
+                current_rank_set.insert(as);
+            }
+        }
+        
+        // Add rank 0 ASes to structure
+        std::vector<AS*> rank_0_ases(current_rank_set.begin(), current_rank_set.end());
+        rank_structure_.push_back(rank_0_ases);
+        
+        std::cout << "  Rank 0: " << rank_0_ases.size() << " ASes (no customers)" << std::endl;
+        
+        // Step 2: Propagate ranks upward through provider chain
+        int current_rank = 0;
+        
+        while (!current_rank_set.empty()) {
+            std::unordered_set<AS*> next_rank_set;
+            
+            // For each AS at current rank, check all their providers
+            for (AS* as : current_rank_set) {
+                for (AS* provider : as->getProviders()) {
+                    // Assign rank if:
+                    // 1. Not yet ranked, OR
+                    // 2. Current rank would be higher than existing rank
+                    int new_rank = current_rank + 1;
+                    if (provider->getPropagationRank() == -1 || 
+                        provider->getPropagationRank() < new_rank) {
+                        
+                        provider->setPropagationRank(new_rank);
+                        next_rank_set.insert(provider);
+                    }
+                }
+            }
+            
+            // Move to next rank
+            if (!next_rank_set.empty()) {
+                current_rank++;
+                std::vector<AS*> rank_ases(next_rank_set.begin(), next_rank_set.end());
+                rank_structure_.push_back(rank_ases);
+                
+                std::cout << "  Rank " << current_rank << ": " 
+                         << rank_ases.size() << " ASes" << std::endl;
+                
+                current_rank_set = next_rank_set;
+            } else {
+                break;
+            }
+        }
+        
+        max_rank_ = current_rank;
+        
+        // Now rebuild rank_structure_ based on final ranks
+        // (since ASes may have changed ranks during propagation)
+        rank_structure_.clear();
+        
+        // Find max rank
+        int actual_max_rank = -1;
+        for (const auto& pair : ases_) {
+            if (pair.second->getPropagationRank() > actual_max_rank) {
+                actual_max_rank = pair.second->getPropagationRank();
+            }
+        }
+        
+        max_rank_ = actual_max_rank;
+        
+        // Resize rank structure
+        rank_structure_.resize(max_rank_ + 1);
+        
+        // Populate rank structure with final ranks
+        for (auto& pair : ases_) {
+            AS* as = pair.second.get();
+            int rank = as->getPropagationRank();
+            if (rank >= 0) {
+                rank_structure_[rank].push_back(as);
+            }
+        }
+        
+        std::cout << "Graph flattened! Max rank: " << max_rank_ << std::endl;
+        std::cout << "Total ranks: " << rank_structure_.size() << std::endl;
+        
+        // Verify all ASes have ranks
+        int unranked = 0;
+        for (const auto& pair : ases_) {
+            if (pair.second->getPropagationRank() == -1) {
+                unranked++;
+            }
+        }
+        
+        if (unranked > 0) {
+            std::cerr << "Warning: " << unranked << " ASes have no rank!" << std::endl;
+        }
+    }
+    
+    /**
+     * Get all ASes at a specific propagation rank
+     */
+    const std::vector<AS*>& getASesAtRank(int rank) const {
+        static const std::vector<AS*> empty;
+        if (rank < 0 || rank >= static_cast<int>(rank_structure_.size())) {
+            return empty;
+        }
+        return rank_structure_[rank];
+    }
+    
+    /**
+     * Get the maximum propagation rank
+     */
+    int getMaxPropagationRank() const {
+        return max_rank_;
+    }
+    
+    /**
+     * Get the number of ranks
+     */
+    size_t getNumRanks() const {
+        return rank_structure_.size();
+    }
     
 private:
     // Storage for all AS objects (ASN -> AS object)
     std::unordered_map<uint32_t, std::unique_ptr<AS>> ases_;
+    
+    // Flattened graph structure: rank -> vector of ASes at that rank
+    std::vector<std::vector<AS*>> rank_structure_;
+    
+    // Maximum rank in the graph
+    int max_rank_ = -1;
     
     // Helper: Parse a single line from CAIDA file
     bool parseCAIDALine(const std::string& line) {
@@ -177,7 +325,9 @@ private:
             AS* as1 = getOrCreateAS(asn1);
             AS* as2 = getOrCreateAS(asn2);
             
-            // https://publicdata.caida.org/datasets/as-relationships/serial-2/#:~:text=The%20as%2Drel%20files%20contain%20p2p%20and%20p2c%20relationships.%20%20The%20format%20is%3A%0A%3Cprovider%2Das%3E%7C%3Ccustomer%2Das%3E%7C%2D1%0A%3Cpeer%2Das%3E%7C%3Cpeer%2Das%3E%7C0%7C%3Csource%3E
+            // CAIDA format: https://publicdata.caida.org/datasets/as-relationships/
+            // <provider-as>|<customer-as>|-1
+            // <peer-as>|<peer-as>|0|<source>
 
             if (relationship == -1) {
                 // Provider-customer relationship

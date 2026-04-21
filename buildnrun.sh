@@ -1,1 +1,0 @@
-g++ ./src/*.cpp -o build/bgp.exe -I ./include/ && ./build/bgp.exe
