@@ -1,2 +1,4 @@
 bench/
 build/
+output/
+*.pdf
