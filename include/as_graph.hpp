@@ -289,6 +289,161 @@ public:
         return rank_structure_.size();
     }
     
+    /**
+     * Propagate announcements UP the provider chain (Section 3.5)
+     * Go from rank 0 up to max rank
+     */
+    void propagateUp() {
+        std::cout << "\n=== Propagating UP (customers -> providers) ===" << std::endl;
+        
+        // Start at rank 0 and go up
+        for (size_t rank = 0; rank < rank_structure_.size(); ++rank) {
+            // Step 1: All ASes at this rank send to their providers
+            for (AS* as : rank_structure_[rank]) {
+                BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+                if (!policy) continue;
+                
+                // Get all announcements from local RIB
+                auto announcements = policy->getAnnouncementsToSend();
+                
+                for (const auto& ann : announcements) {
+                    // Create new announcement for sending
+                    Announcement sent_ann = ann;
+                    sent_ann.setNextHopASN(as->getASN());
+                    sent_ann.setReceivedFrom("customer");  // Provider receives from customer
+                    
+                    // Send to all providers
+                    for (AS* provider : as->getProviders()) {
+                        BGP* provider_policy = dynamic_cast<BGP*>(provider->getPolicy());
+                        if (provider_policy) {
+                            provider_policy->receiveAnnouncement(sent_ann);
+                        }
+                    }
+                }
+            }
+            
+            // Step 2: Process at next rank (if not at top)
+            if (rank + 1 < rank_structure_.size()) {
+                for (AS* as : rank_structure_[rank + 1]) {
+                    BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+                    if (policy) {
+                        policy->processReceivedAnnouncements(as->getASN());
+                        policy->clearReceivedQueue();
+                    }
+                }
+            }
+        }
+        
+        std::cout << "  Propagated through " << rank_structure_.size() << " ranks" << std::endl;
+    }
+    
+    /**
+     * Propagate announcements ACROSS to peers (Section 3.5)
+     * ONE HOP ONLY - valley-free routing
+     */
+    void propagateAcross() {
+        std::cout << "\n=== Propagating ACROSS (peers -> peers, one hop only) ===" << std::endl;
+        
+        // Step 1: ALL ASes send to peers (all at once)
+        for (auto& pair : ases_) {
+            AS* as = pair.second.get();
+            BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+            if (!policy) continue;
+            
+            auto announcements = policy->getAnnouncementsToSend();
+            
+            for (const auto& ann : announcements) {
+                Announcement sent_ann = ann;
+                sent_ann.setNextHopASN(as->getASN());
+                sent_ann.setReceivedFrom("peer");
+                
+                // Send to all peers
+                for (AS* peer : as->getPeers()) {
+                    BGP* peer_policy = dynamic_cast<BGP*>(peer->getPolicy());
+                    if (peer_policy) {
+                        peer_policy->receiveAnnouncement(sent_ann);
+                    }
+                }
+            }
+        }
+        
+        // Step 2: ALL ASes process (all at once - prevents multi-hop)
+        for (auto& pair : ases_) {
+            AS* as = pair.second.get();
+            BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+            if (policy) {
+                policy->processReceivedAnnouncements(as->getASN());
+                policy->clearReceivedQueue();
+            }
+        }
+        
+        std::cout << "  Propagated across peers" << std::endl;
+    }
+    
+    /**
+     * Propagate announcements DOWN to customers (Section 3.5)
+     * Go from max rank down to rank 0
+     */
+    void propagateDown() {
+        std::cout << "\n=== Propagating DOWN (providers -> customers) ===" << std::endl;
+        
+        // Start at max rank and go down to 0
+        for (int rank = max_rank_; rank >= 0; --rank) {
+            // Step 1: All ASes at this rank send to their customers
+            for (AS* as : rank_structure_[rank]) {
+                BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+                if (!policy) continue;
+                
+                auto announcements = policy->getAnnouncementsToSend();
+                
+                for (const auto& ann : announcements) {
+                    Announcement sent_ann = ann;
+                    sent_ann.setNextHopASN(as->getASN());
+                    sent_ann.setReceivedFrom("provider");  // Customer receives from provider
+                    
+                    // Send to all customers
+                    for (AS* customer : as->getCustomers()) {
+                        BGP* customer_policy = dynamic_cast<BGP*>(customer->getPolicy());
+                        if (customer_policy) {
+                            customer_policy->receiveAnnouncement(sent_ann);
+                        }
+                    }
+                }
+            }
+            
+            // Step 2: Process at lower rank (if not at bottom)
+            if (rank > 0) {
+                for (AS* as : rank_structure_[rank - 1]) {
+                    BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+                    if (policy) {
+                        policy->processReceivedAnnouncements(as->getASN());
+                        policy->clearReceivedQueue();
+                    }
+                }
+            }
+        }
+        
+        std::cout << "  Propagated through " << rank_structure_.size() << " ranks" << std::endl;
+    }
+    
+    /**
+     * Full propagation: UP -> ACROSS -> DOWN (Sections 3.5 & 3.6)
+     * This is the complete BGP announcement propagation
+     */
+    void propagateAnnouncements() {
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "Starting BGP Announcement Propagation" << std::endl;
+        std::cout << "========================================" << std::endl;
+        
+        propagateUp();
+        propagateAcross();
+        propagateDown();
+        
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "Propagation Complete!" << std::endl;
+        std::cout << "========================================" << std::endl;
+    }
+    
 private:
     // Storage for all AS objects (ASN -> AS object)
     std::unordered_map<uint32_t, std::unique_ptr<AS>> ases_;

@@ -60,11 +60,55 @@ public:
     }
     
     /**
-     * Process all received announcements
+     * Process all received announcements WITH prepending
      * For each prefix, select the best announcement and update local RIB
+     * @param asn The ASN of the AS that owns this policy (for prepending to AS path)
+     */
+    void processReceivedAnnouncements(uint32_t asn) {
+        // Process each prefix in the received queue
+        for (auto& pair : received_queue_) {
+            const std::string& prefix = pair.first;
+            std::vector<Announcement>& announcements = pair.second;
+            
+            if (announcements.empty()) {
+                continue;
+            }
+            
+            // Find the best announcement for this prefix from received queue
+            Announcement best = announcements[0];
+            for (size_t i = 1; i < announcements.size(); ++i) {
+                best = selectBest(best, announcements[i]);
+            }
+            
+            // Check if we already have an announcement for this prefix
+            auto rib_it = local_rib_.find(prefix);
+            if (rib_it != local_rib_.end()) {
+                // Compare with existing announcement
+                Announcement existing = rib_it->second;
+                Announcement new_candidate = best;
+                
+                // Prepend to the NEW candidate only
+                new_candidate.prependASPath(asn);
+                
+                // Now select between existing and new
+                best = selectBest(existing, new_candidate);
+                
+                // Store the winner (no additional prepending needed)
+                local_rib_[prefix] = best;
+            } else {
+                // No existing announcement - prepend and store
+                best.prependASPath(asn);
+                local_rib_[prefix] = best;
+            }
+        }
+    }
+    
+    /**
+     * Process all received announcements WITHOUT prepending
+     * This is the base interface version for backward compatibility
      */
     void processReceivedAnnouncements() override {
-        // Process each prefix in the received queue
+        // Process without prepending - used for testing
         for (auto& pair : received_queue_) {
             const std::string& prefix = pair.first;
             std::vector<Announcement>& announcements = pair.second;
@@ -86,7 +130,7 @@ public:
                 best = selectBest(rib_it->second, best);
             }
             
-            // Store the best announcement in local RIB
+            // Store without prepending
             local_rib_[prefix] = best;
         }
     }
