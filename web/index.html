@@ -142,6 +142,27 @@
     .hint.ok   { color: var(--green); }
     .hint.warn { color: var(--orange); }
 
+    /* ── Announcement row editor ─────────────────────────── */
+    .ann-row {
+      display: grid;
+      grid-template-columns: 70px 1fr auto auto;
+      gap: 6px; align-items: center; margin-bottom: 5px;
+    }
+    .ann-row input[type="number"],
+    .ann-row input[type="text"] { width: 100%; padding: 5px 8px; font-size: .8rem; }
+    .ann-rov-wrap {
+      display: flex; align-items: center; gap: 4px;
+      font-size: .72rem; color: var(--muted);
+      white-space: nowrap; cursor: pointer; user-select: none;
+    }
+    .btn-icon {
+      background: var(--raised); border: 1px solid var(--border);
+      color: var(--muted); width: 24px; height: 24px; padding: 0;
+      font-size: 1rem; line-height: 24px; flex-shrink: 0; text-align: center;
+    }
+    .btn-icon:hover { border-color: var(--red); color: var(--red); }
+    .anns-toolbar { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+
     /* ── Buttons ─────────────────────────────────────────── */
     button { cursor: pointer; border: none; border-radius: 6px; font-weight: 600; transition: background .15s, opacity .15s; }
 
@@ -334,9 +355,15 @@
     </div>
 
     <div class="field">
-      <label>Announcements CSV <span style="color:var(--red)">*</span></label>
-      <input type="file" id="anns-file" accept=".csv" />
-      <div class="hint" id="anns-hint">Columns: seed_asn, prefix, rov_invalid</div>
+      <label>Announcements <span style="color:var(--red)">*</span></label>
+      <div id="anns-rows"></div>
+      <div class="anns-toolbar">
+        <button class="btn-sm" onclick="addAnnRow()">+ Add row</button>
+        <label class="btn-sm" style="cursor:pointer;display:inline-flex;align-items:center;gap:5px">
+          Load CSV <input type="file" id="anns-file" accept=".csv" style="display:none" />
+        </label>
+      </div>
+      <div class="hint" id="anns-hint">Click <strong>+ Add row</strong> — or click any node in the graph below</div>
     </div>
 
     <div class="field">
@@ -367,8 +394,8 @@
     <div id="results-body">
       <div class="empty-state">
         <div class="empty-icon">🌐</div>
-        <p>Load data, enter a target ASN, and click <strong>Run Simulation</strong>.</p>
-        <p style="margin-top:6px">New here? Click <strong>Demo</strong> next to each input to prefill sample data.</p>
+        <p>Load a topology, add announcements, enter a target ASN, and click <strong>Run Simulation</strong>.</p>
+        <p style="margin-top:6px">New here? Click one of the <strong>Presets</strong> at the top to prefill sample data.</p>
       </div>
     </div>
   </section>
@@ -427,7 +454,6 @@
 // State
 // ─────────────────────────────────────────────────────────────
 let caidaContent  = null;
-let annsContent   = null;
 let worker        = null;
 let workerReady   = false;
 let running       = false;
@@ -503,13 +529,61 @@ document.getElementById('caida-file').addEventListener('change', async function(
   caidaContent = await readFile(f);
   cachedTopo = cachedTopoKey = cachedRanks = cachedRanksKey = null;
   document.querySelectorAll('.btn-preset').forEach(b => b.classList.remove('active'));
+  document.getElementById('anns-rows').innerHTML = ''; // clear rows when topology changes
   setHint('caida-hint', `✓ ${f.name}  (${fmtBytes(f.size)})`, 'ok');
 });
 document.getElementById('anns-file').addEventListener('change', async function() {
   const f = this.files[0]; if (!f) return;
-  annsContent = await readFile(f);
-  setHint('anns-hint', `✓ ${f.name}  (${fmtBytes(f.size)})`, 'ok');
+  const csv = await readFile(f);
+  parseAnnsCSVtoRows(csv);
+  setHint('anns-hint', `✓ ${f.name} loaded`, 'ok');
+  this.value = '';  // allow re-loading same file
 });
+
+// ─────────────────────────────────────────────────────────────
+// Announcement row editor
+// ─────────────────────────────────────────────────────────────
+function addAnnRow(asn, prefix, rovInvalid) {
+  const row = document.createElement('div');
+  row.className = 'ann-row';
+  row.innerHTML =
+    `<input type="number" class="ann-asn" placeholder="ASN" min="1" value="${asn || ''}" />` +
+    `<input type="text"   class="ann-prefix" placeholder="e.g. 10.0.0.0/24" value="${escHtml(prefix || '')}" />` +
+    `<label class="ann-rov-wrap" title="Check if this is a route hijack (rov_invalid=True)">` +
+      `<input type="checkbox" class="ann-rov" ${rovInvalid ? 'checked' : ''} /> hijack` +
+    `</label>` +
+    `<button class="btn-icon" title="Remove" onclick="this.closest('.ann-row').remove()">×</button>`;
+  document.getElementById('anns-rows').appendChild(row);
+  if (!asn) row.querySelector('.ann-asn').focus();
+  else if (!prefix) row.querySelector('.ann-prefix').focus();
+}
+
+function parseAnnsCSVtoRows(csv) {
+  document.getElementById('anns-rows').innerHTML = '';
+  let first = true;
+  for (const raw of csv.split('\n')) {
+    const line = raw.trim().replace(/\r$/, '');
+    if (!line) continue;
+    if (first) { first = false; if (/^seed_asn/i.test(line)) continue; }
+    const parts = line.split(',');
+    if (parts.length < 3) continue;
+    const asn    = parts[0].trim();
+    const prefix = parts[1].trim();
+    const rov    = /^true$/i.test(parts[2].trim());
+    if (asn && prefix) addAnnRow(asn, prefix, rov);
+  }
+}
+
+function getAnnsCSV() {
+  let csv = 'seed_asn,prefix,rov_invalid\n';
+  for (const row of document.querySelectorAll('#anns-rows .ann-row')) {
+    const asn    = row.querySelector('.ann-asn').value.trim();
+    const prefix = row.querySelector('.ann-prefix').value.trim();
+    const rov    = row.querySelector('.ann-rov').checked ? 'True' : 'False';
+    if (asn && prefix) csv += `${asn},${prefix},${rov}\n`;
+  }
+  return csv;
+}
 
 async function loadPreset(type) {
   const PRESETS = {
@@ -543,13 +617,13 @@ async function loadPreset(type) {
     ]);
 
     caidaContent = caida;
-    annsContent  = anns;
     cachedTopo = cachedTopoKey = cachedRanks = cachedRanksKey = null;
+    parseAnnsCSVtoRows(anns);
 
     document.getElementById('rov-asns').value       = rov.trim();
     document.getElementById('target-asn').value     = cfg.targetAsn;
     setHint('caida-hint', `✓ ${cfg.label} topology loaded`, 'ok');
-    setHint('anns-hint',  `✓ Announcements loaded`, 'ok');
+    setHint('anns-hint',  `✓ ${cfg.label} announcements loaded`, 'ok');
 
     prog.style.display = 'none';
     document.querySelectorAll('.btn-preset').forEach(b => { b.disabled = false; b.classList.remove('active'); });
@@ -591,14 +665,17 @@ function runSimulation() {
   if (!workerReady || running) return;
   const targetAsn  = parseInt(document.getElementById('target-asn').value, 10);
   const rovContent = document.getElementById('rov-asns').value || '';
+  const annsCSV    = getAnnsCSV();
 
-  if (!caidaContent) { showError('Please upload a topology file or click Demo.'); return; }
-  if (!annsContent)  { showError('Please upload an announcements CSV or click Demo.'); return; }
+  if (!caidaContent) { showError('Please load a topology file or choose a preset.'); return; }
+  if (annsCSV.split('\n').filter(l => l && !l.startsWith('seed_asn')).length === 0) {
+    showError('Please add at least one announcement row.'); return;
+  }
   if (!targetAsn || targetAsn < 1) { showError('Please enter a valid target ASN.'); return; }
 
   lastTargetAsn = targetAsn;
   setRunning(true);
-  worker.postMessage({ type:'simulate', caida:caidaContent, anns:annsContent,
+  worker.postMessage({ type:'simulate', caida:caidaContent, anns:annsCSV,
                        rov:rovContent, targetAsn });
 }
 
@@ -751,17 +828,32 @@ function computeRanks(topoNodes, topoEdges) {
 let particles  = [];
 let particleRaf = null;
 
-// Named function so visNetwork.off() can remove the exact same reference
+// Named function so visNetwork.off() can remove the exact same reference.
+// Particles are drawn in vis.js world coordinates via the afterDrawing hook,
+// following the quadratic bezier of each edge (via its internal via-node).
 function renderParticles(ctx) {
   if (!visNetwork || !particles.length) return;
-  const pos = visNetwork.getPositions();
+  const pos   = visNetwork.getPositions();
+  const edges = visNetwork.body.edges;
   ctx.save();
   for (const p of particles) {
     const fp = pos[p.from];
     const tp = pos[p.to];
     if (!fp || !tp) continue;
-    const x = fp.x + (tp.x - fp.x) * p.t;
-    const y = fp.y + (tp.y - fp.y) * p.t;
+
+    // Quadratic bezier along the actual edge curve when a via node exists
+    const edge = p.eid !== undefined ? edges[p.eid] : null;
+    let x, y;
+    if (edge && edge.via) {
+      const vx = edge.via.x, vy = edge.via.y;
+      const t = p.t, mt = 1 - t;
+      x = mt*mt*fp.x + 2*mt*t*vx + t*t*tp.x;
+      y = mt*mt*fp.y + 2*mt*t*vy + t*t*tp.y;
+    } else {
+      x = fp.x + (tp.x - fp.x) * p.t;
+      y = fp.y + (tp.y - fp.y) * p.t;
+    }
+
     ctx.beginPath();
     ctx.arc(x, y, p.r, 0, Math.PI * 2);
     ctx.fillStyle   = p.color;
@@ -776,8 +868,17 @@ function startParticles(routes) {
   stopParticles();
   if (!routes.length || !visNetwork) return;
 
-  // Build one set of staggered particles per directed path-edge
-  // Direction: origin → target (how BGP announcements propagate)
+  // Pre-build a lookup from "fromId_toId" → vis.js body edge id so we can
+  // read each edge's bezier via-node at render time without searching.
+  const bodyEdgeMap = new Map();
+  for (const eid in visNetwork.body.edges) {
+    const be = visNetwork.body.edges[eid];
+    bodyEdgeMap.set(`${be.fromId}_${be.toId}`, eid);
+    bodyEdgeMap.set(`${be.toId}_${be.fromId}`, eid);
+  }
+
+  // Build one set of staggered particles per directed path-edge.
+  // Direction: origin → target (how BGP announcements propagate).
   for (const route of routes) {
     const path  = route.as_path;  // [target, ..., origin]
     const color = route.rov_invalid ? '#e3b341' : '#58a6ff';
@@ -785,9 +886,10 @@ function startParticles(routes) {
     for (let i = 0; i < path.length - 1; i++) {
       const from = path[i + 1];   // origin side
       const to   = path[i];       // target side
+      const eid  = bodyEdgeMap.get(`${from}_${to}`);
       const speed = 0.004 + Math.random() * 0.0015;
       for (let k = 0; k < 3; k++) {
-        particles.push({ from, to, t: k / 3, speed, color, r });
+        particles.push({ from, to, t: k / 3, speed, color, r, eid });
       }
     }
   }
@@ -929,6 +1031,7 @@ function buildGraph(routes, targetAsn) {
     const isPeer = e.rel === 0;
 
     visEdges.push({
+      id: `e${Math.min(e.from,e.to)}_${Math.max(e.from,e.to)}`,
       from: e.from, to: e.to,
       color: {
         color:     onPath ? '#58a6ff' : '#2a3040',
@@ -999,6 +1102,22 @@ function buildGraph(routes, targetAsn) {
       edges: { smooth: { type: 'dynamic' } },
     }
   );
+
+  // Click a node → jump to or add its announcement row
+  visNetwork.on('click', function(params) {
+    if (!params.nodes.length) return;
+    const asn = params.nodes[0];
+    const existing = [...document.querySelectorAll('#anns-rows .ann-asn')]
+                       .find(i => +i.value === asn);
+    if (existing) {
+      existing.focus();
+      existing.closest('.ann-row').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+      addAnnRow(asn, '', false);
+      const last = document.querySelector('#anns-rows .ann-row:last-child .ann-prefix');
+      if (last) { last.focus(); last.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+    }
+  });
 
   // Start flow particles once the network exists (after first stabilization)
   visNetwork.once('stabilizationIterationsDone', () => startParticles(routes));
