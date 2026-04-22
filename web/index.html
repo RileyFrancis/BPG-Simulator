@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BGP Simulator</title>
+  <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -65,27 +66,26 @@
     .badge-running { background: var(--blue-dim);      color: var(--blue); }
     .badge-error   { background: rgba(248,81,73,.15);  color: var(--red); }
 
-    .dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      background: currentColor;
-    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
     .dot-pulse { animation: pulse 1.4s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
     /* ── Layout ─────────────────────────────────────────── */
-    main {
+    .page-wrap {
       max-width: 1300px;
       margin: 0 auto;
-      padding: 24px 20px;
+      padding: 24px 20px 40px;
       display: grid;
       grid-template-columns: 360px 1fr;
+      grid-template-rows: auto auto;
       gap: 20px;
       align-items: start;
     }
+    .graph-card { grid-column: 1 / -1; }
+
     @media (max-width: 820px) {
-      main { grid-template-columns: 1fr; }
-      header h1 { font-size: 1.7rem; }
+      .page-wrap { grid-template-columns: 1fr; }
+      header h1  { font-size: 1.7rem; }
     }
 
     /* ── Cards ───────────────────────────────────────────── */
@@ -113,7 +113,6 @@
       color: var(--muted);
       margin-bottom: 5px;
     }
-
     input[type="file"],
     input[type="number"],
     textarea {
@@ -139,22 +138,13 @@
     .file-row { display: flex; gap: 8px; align-items: center; }
     .file-row input[type="file"] { flex: 1; }
 
-    .hint {
-      font-size: .75rem;
-      color: var(--muted);
-      margin-top: 4px;
-    }
+    .hint { font-size: .75rem; color: var(--muted); margin-top: 4px; }
     .hint.ok   { color: var(--green); }
     .hint.warn { color: var(--orange); }
 
     /* ── Buttons ─────────────────────────────────────────── */
-    button {
-      cursor: pointer;
-      border: none;
-      border-radius: 6px;
-      font-weight: 600;
-      transition: background .15s, opacity .15s;
-    }
+    button { cursor: pointer; border: none; border-radius: 6px; font-weight: 600; transition: background .15s, opacity .15s; }
+
     .btn-demo {
       background: var(--raised);
       border: 1px solid var(--border);
@@ -166,56 +156,39 @@
     .btn-demo:hover { border-color: var(--blue); color: var(--blue); }
 
     .btn-run {
-      width: 100%;
-      padding: 11px;
-      margin-top: 6px;
-      background: var(--blue);
-      color: #0d1117;
-      font-size: .95rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
+      width: 100%; padding: 11px; margin-top: 6px;
+      background: var(--blue); color: #0d1117; font-size: .95rem;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
     }
     .btn-run:hover:not(:disabled) { background: #79b8ff; }
     .btn-run:disabled { opacity: .45; cursor: not-allowed; }
 
-    .btn-export {
+    .btn-sm {
       background: var(--raised);
       border: 1px solid var(--border);
       color: var(--muted);
       padding: 5px 12px;
       font-size: .8rem;
     }
-    .btn-export:hover { color: var(--text); border-color: var(--muted); }
+    .btn-sm:hover { color: var(--text); border-color: var(--muted); }
 
-    /* ── Results ─────────────────────────────────────────── */
+    /* ── Results table ───────────────────────────────────── */
     .results-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 14px;
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 14px;
     }
     .route-count { color: var(--muted); font-size: .85rem; }
 
-    .empty-state {
-      text-align: center;
-      padding: 48px 20px;
-      color: var(--muted);
-    }
-    .empty-icon { font-size: 2.5rem; margin-bottom: 10px; }
+    .empty-state { text-align: center; padding: 48px 20px; color: var(--muted); }
+    .empty-icon  { font-size: 2.5rem; margin-bottom: 10px; }
     .empty-state p { font-size: .9rem; }
 
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: .85rem; }
     thead th {
-      background: var(--raised);
-      color: var(--muted);
-      font-weight: 500;
-      padding: 9px 14px;
-      text-align: left;
-      border-bottom: 1px solid var(--border);
-      white-space: nowrap;
+      background: var(--raised); color: var(--muted); font-weight: 500;
+      padding: 9px 14px; text-align: left;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
     }
     tbody td {
       padding: 9px 14px;
@@ -227,60 +200,84 @@
     tbody tr:hover td { background: rgba(88,166,255,.04); }
 
     .tag {
-      display: inline-block;
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: .7rem;
-      font-weight: 600;
-      margin-left: 6px;
+      display: inline-block; padding: 1px 6px; border-radius: 4px;
+      font-size: .7rem; font-weight: 600; margin-left: 6px;
     }
     .tag-invalid { background: rgba(248,81,73,.15); color: var(--red); }
 
-    /* ── Error box ───────────────────────────────────────── */
-    .error-box {
-      background: rgba(248,81,73,.1);
-      border: 1px solid rgba(248,81,73,.3);
+    /* ── Graph card ──────────────────────────────────────── */
+    .graph-header {
+      display: flex; align-items: center;
+      justify-content: space-between; flex-wrap: wrap; gap: 10px;
+      margin-bottom: 14px;
+    }
+    .graph-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+    .toggle-wrap {
+      display: flex; align-items: center; gap: 7px;
+      font-size: .83rem; color: var(--muted);
+      cursor: pointer; user-select: none;
+    }
+    /* custom toggle switch */
+    .toggle-wrap input[type="checkbox"] { display: none; }
+    .toggle-switch {
+      position: relative; width: 34px; height: 18px;
+      background: var(--border); border-radius: 9px;
+      transition: background .2s; flex-shrink: 0;
+    }
+    .toggle-switch::after {
+      content: ''; position: absolute;
+      width: 12px; height: 12px; border-radius: 50%;
+      background: var(--muted); top: 3px; left: 3px;
+      transition: left .2s, background .2s;
+    }
+    .toggle-wrap input:checked + .toggle-switch { background: var(--blue); }
+    .toggle-wrap input:checked + .toggle-switch::after { left: 19px; background: #fff; }
+
+    #graph-canvas {
+      width: 100%; height: 520px;
+      background: var(--raised);
+      border: 1px solid var(--border);
       border-radius: 6px;
-      color: var(--red);
-      padding: 12px 16px;
-      font-size: .875rem;
     }
 
-    /* ── Spinner ─────────────────────────────────────────── */
+    .graph-legend {
+      display: flex; flex-wrap: wrap; gap: 18px;
+      margin-top: 14px; padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: .75rem; color: var(--muted); }
+    .legend-dot  { width: 10px; height: 10px; border-radius: 50%; border: 2px solid; flex-shrink: 0; }
+    .legend-line { width: 22px; height: 2px; flex-shrink: 0; }
+    .legend-line.dashed {
+      background: repeating-linear-gradient(
+        90deg, var(--muted) 0, var(--muted) 4px, transparent 4px, transparent 8px
+      );
+    }
+
+    /* ── Error / spinner ─────────────────────────────────── */
+    .error-box {
+      background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.3);
+      border-radius: 6px; color: var(--red); padding: 12px 16px; font-size: .875rem;
+    }
     .spinner {
-      display: inline-block;
-      width: 16px; height: 16px;
-      border: 2px solid rgba(13,17,23,.3);
-      border-top-color: #0d1117;
-      border-radius: 50%;
-      animation: spin .7s linear infinite;
-      flex-shrink: 0;
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid rgba(13,17,23,.3); border-top-color: #0d1117;
+      border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-
-    .loading-state {
-      text-align: center;
-      padding: 48px 20px;
-      color: var(--muted);
-    }
+    .loading-state { text-align: center; padding: 48px 20px; color: var(--muted); }
     .loading-state .big-spinner {
-      width: 36px; height: 36px;
-      border: 3px solid var(--border);
-      border-top-color: var(--blue);
-      border-radius: 50%;
-      animation: spin .8s linear infinite;
-      margin: 0 auto 14px;
+      width: 36px; height: 36px; border: 3px solid var(--border);
+      border-top-color: var(--blue); border-radius: 50%;
+      animation: spin .8s linear infinite; margin: 0 auto 14px;
     }
     .loading-state p { font-size: .9rem; }
 
     /* ── Footer ─────────────────────────────────────────── */
     footer {
-      text-align: center;
-      padding: 20px;
-      color: var(--muted);
-      font-size: .75rem;
-      border-top: 1px solid var(--border);
-      margin-top: 32px;
+      text-align: center; padding: 20px; color: var(--muted); font-size: .75rem;
+      border-top: 1px solid var(--border); margin-top: 8px;
     }
     footer a { color: var(--blue); text-decoration: none; }
   </style>
@@ -296,8 +293,9 @@
   </div>
 </header>
 
-<main>
-  <!-- ── Inputs ──────────────────────────────────────────── -->
+<div class="page-wrap">
+
+  <!-- ── Inputs ─────────────────────────────────────── -->
   <section class="card">
     <div class="card-title">Simulation Inputs</div>
 
@@ -338,13 +336,12 @@
     </button>
   </section>
 
-  <!-- ── Results ─────────────────────────────────────────── -->
+  <!-- ── Routing Table ──────────────────────────────── -->
   <section class="card" id="results-card">
     <div class="results-header">
       <div class="card-title" style="margin-bottom:0">Routing Table</div>
       <div id="results-meta" style="display:flex;align-items:center;gap:10px"></div>
     </div>
-
     <div id="results-body">
       <div class="empty-state">
         <div class="empty-icon">🌐</div>
@@ -353,7 +350,50 @@
       </div>
     </div>
   </section>
-</main>
+
+  <!-- ── AS Graph ───────────────────────────────────── -->
+  <section class="card graph-card" id="graph-section" style="display:none">
+    <div class="graph-header">
+      <div class="card-title" style="margin-bottom:0">AS Graph</div>
+      <div class="graph-controls">
+        <label class="toggle-wrap" title="Show or hide ASes not on any routing path">
+          <input type="checkbox" id="toggle-all" onchange="onToggleAll()" />
+          <span class="toggle-switch"></span>
+          Show all nodes
+        </label>
+        <button class="btn-sm" onclick="resetLayout()">↺ Reset layout</button>
+        <span id="graph-info" class="route-count"></span>
+      </div>
+    </div>
+
+    <div id="graph-canvas"></div>
+
+    <div class="graph-legend">
+      <div class="legend-item">
+        <span class="legend-dot" style="background:#1a3a6b;border-color:#58a6ff"></span> Target AS
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background:#4a2a00;border-color:#e3b341"></span> Route origin
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background:#0d3320;border-color:#3fb950"></span> ROV-deploying (on path)
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background:#1c3050;border-color:#79b8ff"></span> On routing path
+      </div>
+      <div class="legend-item">
+        <span class="legend-dot" style="background:#1e2530;border-color:#30363d"></span> Irrelevant AS
+      </div>
+      <div class="legend-item">
+        <span class="legend-line" style="background:#58a6ff;height:3px"></span> Route path
+      </div>
+      <div class="legend-item">
+        <span class="legend-line dashed"></span> Peer link
+      </div>
+    </div>
+  </section>
+
+</div><!-- .page-wrap -->
 
 <footer>
   BGP Simulator — CSE 3150 Course Project &nbsp;·&nbsp;
@@ -361,16 +401,25 @@
 </footer>
 
 <script>
-// ── State ──────────────────────────────────────────────────
-let caidaContent = null;
-let annsContent  = null;
-let worker       = null;
-let workerReady  = false;
-let running      = false;
-let lastResults  = null;
+// ─────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────
+let caidaContent  = null;
+let annsContent   = null;
+let worker        = null;
+let workerReady   = false;
+let running       = false;
+let lastResults   = null;
 let lastTargetAsn = null;
 
-// ── Worker init ────────────────────────────────────────────
+// Graph state
+let visNetwork    = null;
+let showAll       = false;
+const MAX_IRRELEVANT = 1200;   // cap irrelevant nodes to keep vis.js responsive
+
+// ─────────────────────────────────────────────────────────────
+// Worker
+// ─────────────────────────────────────────────────────────────
 (function initWorker() {
   worker = new Worker('worker.js');
 
@@ -384,12 +433,12 @@ let lastTargetAsn = null;
       setRunning(false);
       let parsed;
       try { parsed = JSON.parse(e.data.data); } catch(_) {
-        showError('Could not parse simulation result.');
-        return;
+        showError('Could not parse simulation result.'); return;
       }
       if (parsed && parsed.error) { showError(parsed.error); return; }
       lastResults = parsed;
       renderTable(parsed);
+      buildGraph(parsed, lastTargetAsn);
 
     } else if (e.data.type === 'error') {
       setRunning(false);
@@ -404,7 +453,9 @@ let lastTargetAsn = null;
   };
 })();
 
-// ── File helpers ───────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// File loading
+// ─────────────────────────────────────────────────────────────
 function readFile(file) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -413,7 +464,6 @@ function readFile(file) {
     r.readAsText(file);
   });
 }
-
 function setHint(id, msg, cls) {
   const el = document.getElementById(id);
   el.textContent = msg;
@@ -421,57 +471,43 @@ function setHint(id, msg, cls) {
 }
 
 document.getElementById('caida-file').addEventListener('change', async function() {
-  const f = this.files[0];
-  if (!f) return;
+  const f = this.files[0]; if (!f) return;
   caidaContent = await readFile(f);
   setHint('caida-hint', `✓ ${f.name}  (${fmtBytes(f.size)})`, 'ok');
 });
-
 document.getElementById('anns-file').addEventListener('change', async function() {
-  const f = this.files[0];
-  if (!f) return;
+  const f = this.files[0]; if (!f) return;
   annsContent = await readFile(f);
   setHint('anns-hint', `✓ ${f.name}  (${fmtBytes(f.size)})`, 'ok');
 });
 
-// ── Demo data ──────────────────────────────────────────────
 async function loadDemo(type) {
-  const map = {
-    caida: ['data/demo_caida.txt',    'caida-hint',  'caida'],
-    anns:  ['data/demo_anns.csv',     'anns-hint',   'anns'],
-  };
-  const [url, hintId, contentKey] = map[type];
-
+  const urls = { caida: 'data/demo_caida.txt', anns: 'data/demo_anns.csv' };
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const text = await res.text();
-
-    if (contentKey === 'caida') {
-      caidaContent = text;
-      setHint(hintId, '✓ Demo topology loaded (14 ASes)', 'ok');
-    } else {
-      annsContent = text;
-      setHint(hintId, '✓ Demo announcements loaded', 'ok');
-    }
-
-    // Also prefill the ROV ASNs and target ASN on first demo load
+    const text = await (await fetch(urls[type])).text();
     if (type === 'caida') {
-      const rovText = await (await fetch('data/demo_rov_asns.txt')).text();
-      document.getElementById('rov-asns').value = rovText.trim();
+      caidaContent = text;
+      setHint('caida-hint', '✓ Demo topology loaded (14 ASes)', 'ok');
+      const rov = await (await fetch('data/demo_rov_asns.txt')).text();
+      document.getElementById('rov-asns').value = rov.trim();
       if (!document.getElementById('target-asn').value)
         document.getElementById('target-asn').value = '100';
+    } else {
+      annsContent = text;
+      setHint('anns-hint', '✓ Demo announcements loaded', 'ok');
     }
   } catch (err) {
-    setHint(hintId, '✗ Failed to load demo: ' + err.message, 'warn');
+    setHint(type === 'caida' ? 'caida-hint' : 'anns-hint',
+            '✗ Failed to load demo: ' + err.message, 'warn');
   }
 }
 
-// ── Run ────────────────────────────────────────────────────
-async function runSimulation() {
+// ─────────────────────────────────────────────────────────────
+// Simulation
+// ─────────────────────────────────────────────────────────────
+function runSimulation() {
   if (!workerReady || running) return;
-
-  const targetAsn = parseInt(document.getElementById('target-asn').value, 10);
+  const targetAsn  = parseInt(document.getElementById('target-asn').value, 10);
   const rovContent = document.getElementById('rov-asns').value || '';
 
   if (!caidaContent) { showError('Please upload a topology file or click Demo.'); return; }
@@ -480,30 +516,23 @@ async function runSimulation() {
 
   lastTargetAsn = targetAsn;
   setRunning(true);
-
-  worker.postMessage({
-    type: 'simulate',
-    caida: caidaContent,
-    anns:  annsContent,
-    rov:   rovContent,
-    targetAsn: targetAsn
-  });
+  worker.postMessage({ type:'simulate', caida:caidaContent, anns:annsContent,
+                       rov:rovContent, targetAsn });
 }
 
-// ── UI state helpers ───────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// UI helpers
+// ─────────────────────────────────────────────────────────────
 function setRunning(on) {
   running = on;
   document.getElementById('run-btn').disabled = on;
   document.getElementById('run-spinner').style.display = on ? 'inline-block' : 'none';
   document.getElementById('run-label').textContent = on ? 'Running…' : 'Run Simulation';
-
   if (on) {
     setBadge('running', 'Simulating…');
-    document.getElementById('results-body').innerHTML = `
-      <div class="loading-state">
-        <div class="big-spinner"></div>
-        <p>Propagating routes through the AS graph…</p>
-      </div>`;
+    document.getElementById('results-body').innerHTML =
+      `<div class="loading-state"><div class="big-spinner"></div>
+       <p>Propagating routes through the AS graph…</p></div>`;
     document.getElementById('results-meta').innerHTML = '';
   } else {
     setBadge('ready', 'Simulator ready');
@@ -512,9 +541,9 @@ function setRunning(on) {
 
 function setBadge(type, text) {
   const el = document.getElementById('status-badge');
+  const pulse = (type === 'running' || type === 'loading') ? ' dot-pulse' : '';
   el.className = 'badge badge-' + type;
-  el.innerHTML = `<span class="dot${type === 'running' || type === 'loading' ? ' dot-pulse' : ''}"></span>
-                  <span>${text}</span>`;
+  el.innerHTML = `<span class="dot${pulse}"></span><span>${text}</span>`;
 }
 
 function showError(msg) {
@@ -523,51 +552,256 @@ function showError(msg) {
     `<div class="error-box">⚠ ${escHtml(msg)}</div>`;
 }
 
-// ── Table rendering ────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Routing table
+// ─────────────────────────────────────────────────────────────
 function renderTable(routes) {
   document.getElementById('results-meta').innerHTML =
     `<span class="route-count">${routes.length} route${routes.length !== 1 ? 's' : ''} for AS ${lastTargetAsn}</span>` +
-    (routes.length ? `<button class="btn-export" onclick="exportCSV()">Export CSV</button>` : '');
+    (routes.length ? `<button class="btn-sm" onclick="exportCSV()">Export CSV</button>` : '');
 
-  if (routes.length === 0) {
+  if (!routes.length) {
     document.getElementById('results-body').innerHTML =
       `<div class="empty-state"><div class="empty-icon">📭</div>
-       <p>AS ${lastTargetAsn} has no routes. Try a different ASN or check your inputs.</p></div>`;
+       <p>AS ${lastTargetAsn} has no routes. Try a different ASN.</p></div>`;
     return;
   }
-
   let html = `<div class="table-wrap"><table>
     <thead><tr><th>Prefix</th><th>AS Path</th></tr></thead><tbody>`;
-
   for (const r of routes) {
-    const path = r.as_path.join(' → ');
-    const tag  = r.rov_invalid ? '<span class="tag tag-invalid">ROV-invalid</span>' : '';
-    html += `<tr><td>${escHtml(r.prefix)}</td><td>${escHtml(path)}${tag}</td></tr>`;
+    const tag = r.rov_invalid ? '<span class="tag tag-invalid">ROV-invalid</span>' : '';
+    html += `<tr><td>${escHtml(r.prefix)}</td>
+                 <td>${escHtml(r.as_path.join(' → '))}${tag}</td></tr>`;
   }
-
   html += '</tbody></table></div>';
   document.getElementById('results-body').innerHTML = html;
 }
 
-// ── Export ─────────────────────────────────────────────────
 function exportCSV() {
   if (!lastResults) return;
   let csv = 'asn,prefix,as_path\n';
   for (const r of lastResults) {
-    const tuplePath = r.as_path.length === 1
-      ? `"(${r.as_path[0]},)"`
-      : `"(${r.as_path.join(', ')})"`;
-    csv += `${lastTargetAsn},${r.prefix},${tuplePath}\n`;
+    const p = r.as_path.length === 1
+      ? `"(${r.as_path[0]},)"` : `"(${r.as_path.join(', ')})"`;
+    csv += `${lastTargetAsn},${r.prefix},${p}\n`;
   }
-  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   const a = Object.assign(document.createElement('a'), {
-    href: url, download: `bgp_routes_as${lastTargetAsn}.csv`
+    href: URL.createObjectURL(new Blob([csv], {type:'text/csv'})),
+    download: `bgp_routes_as${lastTargetAsn}.csv`
   });
   a.click();
-  URL.revokeObjectURL(url);
 }
 
-// ── Utilities ──────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// Graph — CAIDA topology parser
+// ─────────────────────────────────────────────────────────────
+function parseCaida(content) {
+  const nodes = new Map();   // asn -> true (just existence)
+  const edges = [];
+
+  for (let line of content.split('\n')) {
+    line = line.trim();
+    if (!line || line[0] === '#') continue;
+    if (line[line.length - 1] === '\r') line = line.slice(0, -1);
+
+    const parts = line.split('|');
+    if (parts.length < 3) continue;
+
+    const a   = parseInt(parts[0], 10);
+    const b   = parseInt(parts[1], 10);
+    const rel = parseInt(parts[2], 10);
+    if (isNaN(a) || isNaN(b) || isNaN(rel)) continue;
+
+    nodes.set(a, true);
+    nodes.set(b, true);
+    edges.push({ from: a, to: b, rel });  // rel: -1 = provider>customer, 0 = peer
+  }
+  return { nodes, edges };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Graph — build & render with vis.js
+// ─────────────────────────────────────────────────────────────
+function buildGraph(routes, targetAsn) {
+  if (!caidaContent) return;
+
+  const topo = parseCaida(caidaContent);
+
+  // ROV set from textarea
+  const rovSet = new Set(
+    document.getElementById('rov-asns').value
+      .split('\n').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
+  );
+
+  // Collect ASes on routing paths and path-edge pairs
+  const pathNodes = new Set([targetAsn]);
+  const pathEdgeKeys = new Set();  // "minASN-maxASN"
+
+  for (const r of routes) {
+    for (const asn of r.as_path) pathNodes.add(asn);
+    for (let i = 0; i < r.as_path.length - 1; i++) {
+      const u = r.as_path[i], v = r.as_path[i + 1];
+      pathEdgeKeys.add(`${Math.min(u,v)}-${Math.max(u,v)}`);
+    }
+  }
+
+  // Which nodes get drawn?
+  const visibleIds = new Set(pathNodes);
+
+  let irrelevantShown = 0, irrelevantTotal = 0;
+  if (showAll) {
+    for (const asn of topo.nodes.keys()) {
+      if (!pathNodes.has(asn)) {
+        irrelevantTotal++;
+        if (irrelevantShown < MAX_IRRELEVANT) {
+          visibleIds.add(asn);
+          irrelevantShown++;
+        }
+      }
+    }
+  } else {
+    for (const asn of topo.nodes.keys()) {
+      if (!pathNodes.has(asn)) irrelevantTotal++;
+    }
+  }
+
+  // Build vis DataSet for nodes
+  const visNodes = [];
+  for (const asn of visibleIds) {
+    const isTarget  = asn === targetAsn;
+    const isRov     = rovSet.has(asn);
+    const onPath    = pathNodes.has(asn);
+    const isOrigin  = routes.some(r => r.as_path[r.as_path.length - 1] === asn);
+
+    let bg, border, fontColor, size, borderWidth;
+
+    if (isTarget) {
+      bg = '#1a3a6b'; border = '#58a6ff'; fontColor = '#e6edf3';
+      size = 30; borderWidth = 3;
+    } else if (isOrigin) {
+      bg = '#4a2a00'; border = '#e3b341'; fontColor = '#e3b341';
+      size = 22; borderWidth = 2;
+    } else if (onPath && isRov) {
+      bg = '#0d3320'; border = '#3fb950'; fontColor = '#3fb950';
+      size = 18; borderWidth = 2;
+    } else if (onPath) {
+      bg = '#1c3050'; border = '#79b8ff'; fontColor = '#79b8ff';
+      size = 16; borderWidth = 2;
+    } else {
+      bg = '#1e2530'; border = '#30363d'; fontColor = '#4d5566';
+      size = 7; borderWidth = 1;
+    }
+
+    visNodes.push({
+      id: asn,
+      label: onPath || isTarget ? `AS${asn}` : '',
+      title: `AS ${asn}${isRov ? ' · ROV' : ''}${isOrigin ? ' · origin' : ''}`,
+      color: {
+        background: bg, border,
+        highlight: { background: '#2a4a8b', border: '#79b8ff' },
+        hover:      { background: '#1e2f50', border: '#58a6ff' }
+      },
+      font: { color: fontColor, size: isTarget ? 14 : onPath ? 11 : 0 },
+      size, borderWidth,
+      shape: 'dot',
+    });
+  }
+
+  // Build vis DataSet for edges (only between visible nodes)
+  const visEdges = [];
+  for (const e of topo.edges) {
+    if (!visibleIds.has(e.from) || !visibleIds.has(e.to)) continue;
+
+    const key    = `${Math.min(e.from, e.to)}-${Math.max(e.from, e.to)}`;
+    const onPath = pathEdgeKeys.has(key);
+    const isPeer = e.rel === 0;
+
+    visEdges.push({
+      from: e.from, to: e.to,
+      color: {
+        color:     onPath ? '#58a6ff' : '#2a3040',
+        highlight: '#79b8ff',
+        hover:     '#58a6ff',
+        opacity:   onPath ? 1.0 : 0.6,
+      },
+      width: onPath ? 2.5 : 1,
+      dashes: isPeer,
+      arrows: isPeer ? undefined : { to: { enabled: true, scaleFactor: 0.6 } },
+      smooth: { type: 'dynamic' },
+    });
+  }
+
+  // Info text
+  const totalNodes = topo.nodes.size;
+  let info = `${pathNodes.size} route node${pathNodes.size !== 1 ? 's' : ''}`;
+  if (showAll) {
+    if (irrelevantTotal > MAX_IRRELEVANT) {
+      info += ` + ${irrelevantShown} of ${irrelevantTotal} others (capped)`;
+    } else {
+      info += ` + ${irrelevantTotal} others`;
+    }
+  } else if (irrelevantTotal > 0) {
+    info += ` · ${irrelevantTotal} node${irrelevantTotal !== 1 ? 's' : ''} hidden`;
+  }
+  document.getElementById('graph-info').textContent = info;
+
+  // Show graph card
+  document.getElementById('graph-section').style.display = 'block';
+
+  // Destroy old network
+  if (visNetwork) { visNetwork.destroy(); visNetwork = null; }
+
+  const container = document.getElementById('graph-canvas');
+
+  visNetwork = new vis.Network(
+    container,
+    { nodes: new vis.DataSet(visNodes), edges: new vis.DataSet(visEdges) },
+    {
+      physics: {
+        enabled: true,
+        solver: 'barnesHut',
+        barnesHut: {
+          gravitationalConstant: -5000,
+          centralGravity: 0.25,
+          springLength: 130,
+          springConstant: 0.05,
+          damping: 0.12,
+          avoidOverlap: 0.3,
+        },
+        stabilization: { iterations: 250, updateInterval: 25 },
+      },
+      interaction: {
+        hover: true,
+        tooltipDelay: 150,
+        navigationButtons: false,
+        zoomView: true,
+        dragView: true,
+      },
+      nodes: { shape: 'dot' },
+      edges: { smooth: { type: 'dynamic' } },
+    }
+  );
+
+  // Stop physics after it stabilises to save CPU
+  visNetwork.once('stabilizationIterationsDone', () => visNetwork.setOptions({ physics: { enabled: false } }));
+}
+
+function onToggleAll() {
+  showAll = document.getElementById('toggle-all').checked;
+  if (lastResults) buildGraph(lastResults, lastTargetAsn);
+}
+
+function resetLayout() {
+  if (!visNetwork) return;
+  visNetwork.setOptions({ physics: { enabled: true } });
+  visNetwork.stabilize(200);
+  visNetwork.once('stabilizationIterationsDone',
+    () => visNetwork.setOptions({ physics: { enabled: false } }));
+}
+
+// ─────────────────────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────────────────────
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
