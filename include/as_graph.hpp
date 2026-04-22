@@ -146,6 +146,50 @@ public:
         return as_ptr;
     }
 
+    // Build graph from an in-memory string (same format as CAIDA file)
+    bool buildFromCAIDAString(const std::string& content) {
+        std::istringstream stream(content);
+        std::string line;
+        size_t errors = 0;
+        while (std::getline(stream, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!parseCAIDALine(line)) {
+                if (++errors > 10) return false;
+            }
+        }
+        if (hasCycles()) return false;
+        return true;
+    }
+
+    // Seed announcements from an in-memory CSV string
+    bool seedFromCSVString(const std::string& content) {
+        std::istringstream stream(content);
+        std::string line;
+        std::getline(stream, line);  // skip header
+        size_t count = 0;
+        while (std::getline(stream, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+            std::istringstream iss(line);
+            std::string asn_str, prefix, rov_str;
+            if (!std::getline(iss, asn_str, ',') ||
+                !std::getline(iss, prefix, ',') ||
+                !std::getline(iss, rov_str)) continue;
+            if (!rov_str.empty() && rov_str.back() == '\r') rov_str.pop_back();
+            try {
+                uint32_t asn = std::stoul(asn_str);
+                bool rov_invalid = (rov_str == "True" || rov_str == "true" || rov_str == "1");
+                AS* as = getAS(asn);
+                if (!as) continue;
+                Policy* policy = as->getPolicy();
+                if (!policy) continue;
+                policy->seedAnnouncement(Announcement(prefix, {asn}, asn, "origin", rov_invalid));
+                count++;
+            } catch (...) {}
+        }
+        return count > 0;
+    }
+
     /**
      * Assign BGP or ROV policies to every AS in the graph.
      * Must be called after buildFromCAIDAFile and before seeding/propagation.

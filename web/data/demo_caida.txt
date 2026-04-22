@@ -1,0 +1,19 @@
+# BGP Simulator — Demo Topology
+# Format: asn1|asn2|relation  (-1: asn1 is provider of asn2;  0: peers)
+#
+# Tier-1 backbone (AS100)
+100|200|-1
+100|300|-1
+100|400|-1
+100|500|-1
+# Tier-2 peering
+200|300|0
+# Tier-2 -> Tier-3
+200|600|-1
+300|700|-1
+400|800|-1
+500|800|-1
+500|900|-1
+# Tier-3 -> stub
+600|1000|-1
+700|1000|-1

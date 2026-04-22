@@ -92,8 +92,28 @@ run_many: bgp_simulator
 		bench/many/rov_asns.csv \
 		output/ribs_many.csv
 
+# WebAssembly build — requires Emscripten (run: source ~/emsdk/emsdk_env.sh)
+EMCC = $(HOME)/emsdk/upstream/emscripten/emcc
+
+wasm: $(SRC_DIR)/wasm_main.cpp $(HEADERS)
+	mkdir -p web
+	$(EMCC) -std=c++17 -O2 \
+		-Iinclude \
+		-s WASM=1 \
+		-s EXPORTED_RUNTIME_METHODS='["ccall"]' \
+		-s EXPORTED_FUNCTIONS='["_run_bgp_simulation"]' \
+		-s ALLOW_MEMORY_GROWTH=1 \
+		-s MODULARIZE=1 \
+		-s EXPORT_NAME='createBGPModule' \
+		-s ENVIRONMENT='web,worker' \
+		-o web/bgp_sim.js \
+		$(SRC_DIR)/wasm_main.cpp
+	@echo "WASM build complete — files written to web/"
+
 clean:
 	rm -rf $(BUILD_DIR)/*
 	rm -rf output/*
 
-.PHONY: clean test pytest pytest-verbose test-python run_prefix run_many test_graph test_announcement test_bgp_policy test_caida_policy test_flatten_graph test_seeding test_propagation test_output test_rov
+.PHONY: clean test pytest pytest-verbose test-python run_prefix run_many wasm \
+        test_graph test_announcement test_bgp_policy test_caida_policy \
+        test_flatten_graph test_seeding test_propagation test_output test_rov
