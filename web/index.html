@@ -269,19 +269,10 @@
     .toggle-wrap input:checked + .toggle-switch { background: var(--blue); }
     .toggle-wrap input:checked + .toggle-switch::after { left: 19px; background: #fff; }
 
-    .graph-canvas-wrap {
-      position: relative;
-    }
     #graph-canvas {
       width: 100%; height: 520px;
       background: var(--raised);
       border: 1px solid var(--border);
-      border-radius: 6px;
-    }
-    #particle-canvas {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
       border-radius: 6px;
     }
 
@@ -424,10 +415,7 @@
       </div>
     </div>
 
-    <div class="graph-canvas-wrap">
-      <div id="graph-canvas"></div>
-      <canvas id="particle-canvas"></canvas>
-    </div>
+    <div id="graph-canvas"></div>
 
     <div class="graph-legend">
       <div class="legend-item">
@@ -482,11 +470,6 @@ let cachedTopo     = null;
 let cachedTopoKey  = null;
 let cachedRanks    = null;
 let cachedRanksKey = null;
-
-// Particle overlay canvas
-let particleCanvas = null;
-let particleCtx    = null;
-let particleRo     = null;   // ResizeObserver for canvas resize
 
 // Drag guard — distinguishes a single click from a click-and-drag
 let dragGuardAttached = false;
@@ -844,67 +827,38 @@ function computeRanks(topoNodes, topoEdges) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Graph — flow particles (drawn on an overlay <canvas>)
-//
-// Drawing directly to an overlay canvas means vis.js only redraws
-// when the user interacts (hover, pan, zoom), not on every animation
-// frame. The RAF loop updates the overlay only, which is much cheaper.
+// Graph — flow particles (drawn via vis.js afterDrawing hook)
 // ─────────────────────────────────────────────────────────────
 let particles   = [];
 let particleRaf = null;
 
-function initParticleCanvas() {
-  const dpr  = window.devicePixelRatio || 1;
-  const rect = particleCanvas.getBoundingClientRect();
-  particleCanvas.width  = Math.round(rect.width  * dpr);
-  particleCanvas.height = Math.round(rect.height * dpr);
-  particleCtx = particleCanvas.getContext('2d');
-  particleCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
-
-// Convert vis.js world coordinates → overlay canvas CSS-pixel coordinates.
-function worldToPixel(wx, wy) {
-  const scale = visNetwork.getScale();
-  const vp    = visNetwork.getViewPosition();
-  const rect  = particleCanvas.getBoundingClientRect();
-  return {
-    x: (wx - vp.x) * scale + rect.width  / 2,
-    y: (wy - vp.y) * scale + rect.height / 2,
-  };
-}
-
-function renderParticlesOverlay() {
-  if (!visNetwork || !particles.length || !particleCtx) return;
-  const rect  = particleCanvas.getBoundingClientRect();
-  const ctx   = particleCtx;
-  ctx.clearRect(0, 0, rect.width, rect.height);
-
+function renderParticles(ctx) {
+  if (!visNetwork || !particles.length) return;
   const pos   = visNetwork.getPositions();
   const edges = visNetwork.body.edges;
-
   ctx.save();
-  ctx.shadowBlur = 8;
   for (const p of particles) {
     const fp = pos[p.from];
     const tp = pos[p.to];
     if (!fp || !tp) continue;
 
-    let wx, wy;
     const edge = p.eid !== undefined ? edges[p.eid] : null;
+    let x, y;
     if (edge && edge.via) {
+      const vx = edge.via.x, vy = edge.via.y;
       const t = p.t, mt = 1 - t;
-      wx = mt*mt*fp.x + 2*mt*t*edge.via.x + t*t*tp.x;
-      wy = mt*mt*fp.y + 2*mt*t*edge.via.y + t*t*tp.y;
+      x = mt*mt*fp.x + 2*mt*t*vx + t*t*tp.x;
+      y = mt*mt*fp.y + 2*mt*t*vy + t*t*tp.y;
     } else {
-      wx = fp.x + (tp.x - fp.x) * p.t;
-      wy = fp.y + (tp.y - fp.y) * p.t;
+      x = fp.x + (tp.x - fp.x) * p.t;
+      y = fp.y + (tp.y - fp.y) * p.t;
     }
 
-    const { x, y } = worldToPixel(wx, wy);
     ctx.beginPath();
     ctx.arc(x, y, p.r, 0, Math.PI * 2);
     ctx.fillStyle   = p.color;
     ctx.shadowColor = p.color;
+    ctx.shadowBlur  = 8;
     ctx.fill();
   }
   ctx.restore();
@@ -914,14 +868,6 @@ function startParticles(routes) {
   stopParticles();
   if (!routes.length || !visNetwork) return;
 
-  particleCanvas = document.getElementById('particle-canvas');
-  initParticleCanvas();
-
-  // Re-initialize when the container resizes (e.g. window resize)
-  particleRo = new ResizeObserver(() => { if (particleCanvas) initParticleCanvas(); });
-  particleRo.observe(particleCanvas);
-
-  // Pre-build edge id lookup so particles can follow bezier via-nodes
   const bodyEdgeMap = new Map();
   for (const eid in visNetwork.body.edges) {
     const be = visNetwork.body.edges[eid];
@@ -930,12 +876,12 @@ function startParticles(routes) {
   }
 
   for (const route of routes) {
-    const path  = route.as_path;  // [target, ..., origin]
+    const path  = route.as_path;
     const color = route.rov_invalid ? '#e3b341' : '#58a6ff';
     const r     = 3.5;
     for (let i = 0; i < path.length - 1; i++) {
-      const from  = path[i + 1];   // origin side
-      const to    = path[i];       // target side
+      const from  = path[i + 1];
+      const to    = path[i];
       const eid   = bodyEdgeMap.get(`${from}_${to}`);
       const speed = 0.004 + Math.random() * 0.0015;
       for (let k = 0; k < 3; k++) {
@@ -944,12 +890,14 @@ function startParticles(routes) {
     }
   }
 
+  visNetwork.on('afterDrawing', renderParticles);
+
   function tick() {
     for (const p of particles) {
       p.t += p.speed;
       if (p.t >= 1) p.t -= 1;
     }
-    renderParticlesOverlay();
+    if (visNetwork) visNetwork.redraw();
     particleRaf = requestAnimationFrame(tick);
   }
   particleRaf = requestAnimationFrame(tick);
@@ -957,11 +905,7 @@ function startParticles(routes) {
 
 function stopParticles() {
   if (particleRaf) { cancelAnimationFrame(particleRaf); particleRaf = null; }
-  if (particleRo)  { particleRo.disconnect(); particleRo = null; }
-  if (particleCtx && particleCanvas) {
-    const rect = particleCanvas.getBoundingClientRect();
-    particleCtx.clearRect(0, 0, rect.width, rect.height);
-  }
+  if (visNetwork)  visNetwork.off('afterDrawing', renderParticles);
   particles = [];
 }
 
@@ -1097,9 +1041,7 @@ function buildGraph(routes, targetAsn) {
       width: onPath ? 2.5 : 1,
       dashes: isPeer,
       arrows: isPeer ? undefined : { to: { enabled: true, scaleFactor: 0.6 } },
-      // Only path edges need dynamic bezier curves (for particle via-nodes);
-      // straight lines on off-path edges eliminate their physics via-nodes.
-      smooth: onPath ? { type: 'dynamic' } : { enabled: false },
+      smooth: { type: 'dynamic' },
     });
   }
 
@@ -1156,7 +1098,7 @@ function buildGraph(routes, targetAsn) {
         dragView: true,
       },
       nodes: { shape: 'dot' },
-      edges: { smooth: { enabled: false } },
+      edges: { smooth: { type: 'dynamic' } },
     }
   );
 
