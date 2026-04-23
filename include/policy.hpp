@@ -168,48 +168,36 @@ public:
 protected:
     /**
      * Select the best announcement between two announcements
-     * 
+     *
      * BGP Selection Rules (in order):
      * 1. Prefer better relationship: origin > customer > peer > provider
      * 2. Prefer shorter AS path
      * 3. Prefer lower next hop ASN (tiebreaker)
      */
     virtual Announcement selectBest(const Announcement& a, const Announcement& b) {
-        // Rule 1: Compare relationships
-        int a_pref = getRelationshipPreference(a.getReceivedFrom());
-        int b_pref = getRelationshipPreference(b.getReceivedFrom());
-        
+        // Rule 1: Compare relationships — enum values encode preference directly
+        int a_pref = static_cast<int>(a.getRelation());
+        int b_pref = static_cast<int>(b.getRelation());
+
         if (a_pref > b_pref) {
             return a;
         } else if (b_pref > a_pref) {
             return b;
         }
-        
+
         // Rule 2: Compare AS path lengths (shorter is better)
         if (a.getASPathLength() < b.getASPathLength()) {
             return a;
         } else if (b.getASPathLength() < a.getASPathLength()) {
             return b;
         }
-        
+
         // Rule 3: Compare next hop ASN (lower is better)
         if (a.getNextHopASN() < b.getNextHopASN()) {
             return a;
         } else {
             return b;
         }
-    }
-    
-    /**
-     * Get numerical preference for relationship type
-     * Higher number = more preferred
-     */
-    int getRelationshipPreference(const std::string& relationship) const {
-        if (relationship == "origin") return 4;      // Most preferred
-        if (relationship == "customer") return 3;
-        if (relationship == "peer") return 2;
-        if (relationship == "provider") return 1;    // Least preferred
-        return 0;  // Unknown
     }
     
     // Local RIB: prefix -> best announcement

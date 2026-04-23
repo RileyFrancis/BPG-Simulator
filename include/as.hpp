@@ -28,10 +28,15 @@ public:
     const std::vector<AS*>& getCustomers() const { return customers_; }
     const std::vector<AS*>& getPeers() const { return peers_; }
     Policy* getPolicy() const { return policy_.get(); }
+    BGP* getBGPPolicy() const { return bgp_policy_; }
     
     // Setters
     void setPropagationRank(int rank) { propagation_rank_ = rank; }
-    void setPolicy(std::unique_ptr<Policy> policy) { policy_ = std::move(policy); }
+    void setPolicy(std::unique_ptr<Policy> policy) {
+        // Cache raw BGP* once at init so propagation avoids dynamic_cast in hot loops
+        bgp_policy_ = dynamic_cast<BGP*>(policy.get());
+        policy_ = std::move(policy);
+    }
     
     // Relationship management
     void addProvider(AS* provider) {
@@ -79,4 +84,5 @@ private:
     std::vector<AS*> peers_;                    // List of peer ASes
     
     std::unique_ptr<Policy> policy_;            // Routing policy (BGP or ROV)
+    BGP* bgp_policy_ = nullptr;                // Non-owning cache; avoids dynamic_cast in hot path
 };

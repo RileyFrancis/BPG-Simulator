@@ -281,13 +281,11 @@ public:
      */
     void flattenGraph() {
         std::cout << "\nFlattening graph (assigning propagation ranks)..." << std::endl;
-        
-        // Clear existing rank structure
+
         rank_structure_.clear();
-        
-        // Step 1: Find all ASes with no customers and assign rank 0
+
+        // Seed BFS from all leaf ASes (no customers) at rank 0
         std::unordered_set<AS*> current_rank_set;
-        
         for (auto& pair : ases_) {
             AS* as = pair.second.get();
             if (!as->hasCustomers()) {
@@ -295,89 +293,47 @@ public:
                 current_rank_set.insert(as);
             }
         }
-        
-        // Add rank 0 ASes to structure
-        std::vector<AS*> rank_0_ases(current_rank_set.begin(), current_rank_set.end());
-        rank_structure_.push_back(rank_0_ases);
-        
-        std::cout << "  Rank 0: " << rank_0_ases.size() << " ASes (no customers)" << std::endl;
-        
-        // Step 2: Propagate ranks upward through provider chain
+
+        // BFS upward: an AS's rank is the maximum rank of any of its customers + 1.
+        // We keep re-raising ranks until no more changes occur.
         int current_rank = 0;
-        
         while (!current_rank_set.empty()) {
             std::unordered_set<AS*> next_rank_set;
-            
-            // For each AS at current rank, check all their providers
+            int new_rank = current_rank + 1;
             for (AS* as : current_rank_set) {
                 for (AS* provider : as->getProviders()) {
-                    // Assign rank if:
-                    // 1. Not yet ranked, OR
-                    // 2. Current rank would be higher than existing rank
-                    int new_rank = current_rank + 1;
-                    if (provider->getPropagationRank() == -1 || 
-                        provider->getPropagationRank() < new_rank) {
-                        
+                    if (provider->getPropagationRank() < new_rank) {
                         provider->setPropagationRank(new_rank);
                         next_rank_set.insert(provider);
                     }
                 }
             }
-            
-            // Move to next rank
-            if (!next_rank_set.empty()) {
-                current_rank++;
-                std::vector<AS*> rank_ases(next_rank_set.begin(), next_rank_set.end());
-                rank_structure_.push_back(rank_ases);
-                
-                std::cout << "  Rank " << current_rank << ": " 
-                         << rank_ases.size() << " ASes" << std::endl;
-                
-                current_rank_set = next_rank_set;
-            } else {
-                break;
-            }
+            if (next_rank_set.empty()) break;
+            current_rank++;
+            current_rank_set = std::move(next_rank_set);
         }
-        
-        max_rank_ = current_rank;
-        
-        // Now rebuild rank_structure_ based on final ranks
-        // (since ASes may have changed ranks during propagation)
-        rank_structure_.clear();
-        
-        // Find max rank
+
+        // Single pass to build rank_structure_ from final rank assignments.
+        // Previously this was done twice (once during BFS, then discarded and rebuilt).
         int actual_max_rank = -1;
         for (const auto& pair : ases_) {
-            if (pair.second->getPropagationRank() > actual_max_rank) {
-                actual_max_rank = pair.second->getPropagationRank();
-            }
+            actual_max_rank = std::max(actual_max_rank, pair.second->getPropagationRank());
         }
-        
         max_rank_ = actual_max_rank;
-        
-        // Resize rank structure
         rank_structure_.resize(max_rank_ + 1);
-        
-        // Populate rank structure with final ranks
         for (auto& pair : ases_) {
             AS* as = pair.second.get();
             int rank = as->getPropagationRank();
-            if (rank >= 0) {
-                rank_structure_[rank].push_back(as);
-            }
+            if (rank >= 0) rank_structure_[rank].push_back(as);
         }
-        
+
         std::cout << "Graph flattened! Max rank: " << max_rank_ << std::endl;
         std::cout << "Total ranks: " << rank_structure_.size() << std::endl;
-        
-        // Verify all ASes have ranks
+
         int unranked = 0;
         for (const auto& pair : ases_) {
-            if (pair.second->getPropagationRank() == -1) {
-                unranked++;
-            }
+            if (pair.second->getPropagationRank() == -1) unranked++;
         }
-        
         if (unranked > 0) {
             std::cerr << "Warning: " << unranked << " ASes have no rank!" << std::endl;
         }
@@ -414,37 +370,27 @@ public:
      */
     void propagateUp() {
         std::cout << "\n=== Propagating UP (customers -> providers) ===" << std::endl;
-        
-        // Start at rank 0 and go up
+
         for (size_t rank = 0; rank < rank_structure_.size(); ++rank) {
-            // Step 1: All ASes at this rank send to their providers
             for (AS* as : rank_structure_[rank]) {
-                BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+                BGP* policy = as->getBGPPolicy();
                 if (!policy) continue;
-                
-                // Get all announcements from local RIB
-                auto announcements = policy->getAnnouncementsToSend();
-                
-                for (const auto& ann : announcements) {
-                    // Create new announcement for sending
+
+                for (const auto& [prefix, ann] : policy->getLocalRIB()) {
                     Announcement sent_ann = ann;
                     sent_ann.setNextHopASN(as->getASN());
-                    sent_ann.setReceivedFrom("customer");  // Provider receives from customer
-                    
-                    // Send to all providers
+                    sent_ann.setReceivedFrom(Relation::Customer);
+
                     for (AS* provider : as->getProviders()) {
-                        BGP* provider_policy = dynamic_cast<BGP*>(provider->getPolicy());
-                        if (provider_policy) {
-                            provider_policy->receiveAnnouncement(sent_ann);
-                        }
+                        BGP* provider_policy = provider->getBGPPolicy();
+                        if (provider_policy) provider_policy->receiveAnnouncement(sent_ann);
                     }
                 }
             }
-            
-            // Step 2: Process at next rank (if not at top)
+
             if (rank + 1 < rank_structure_.size()) {
                 for (AS* as : rank_structure_[rank + 1]) {
-                    BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+                    BGP* policy = as->getBGPPolicy();
                     if (policy) {
                         policy->processReceivedAnnouncements(as->getASN());
                         policy->clearReceivedQueue();
@@ -452,7 +398,7 @@ public:
                 }
             }
         }
-        
+
         std::cout << "  Propagated through " << rank_structure_.size() << " ranks" << std::endl;
     }
     
@@ -462,40 +408,35 @@ public:
      */
     void propagateAcross() {
         std::cout << "\n=== Propagating ACROSS (peers -> peers, one hop only) ===" << std::endl;
-        
-        // Step 1: ALL ASes send to peers (all at once)
+
+        // All ASes send simultaneously (prevents multi-hop peer routes)
         for (auto& pair : ases_) {
             AS* as = pair.second.get();
-            BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+            BGP* policy = as->getBGPPolicy();
             if (!policy) continue;
-            
-            auto announcements = policy->getAnnouncementsToSend();
-            
-            for (const auto& ann : announcements) {
+
+            for (const auto& [prefix, ann] : policy->getLocalRIB()) {
                 Announcement sent_ann = ann;
                 sent_ann.setNextHopASN(as->getASN());
-                sent_ann.setReceivedFrom("peer");
-                
-                // Send to all peers
+                sent_ann.setReceivedFrom(Relation::Peer);
+
                 for (AS* peer : as->getPeers()) {
-                    BGP* peer_policy = dynamic_cast<BGP*>(peer->getPolicy());
-                    if (peer_policy) {
-                        peer_policy->receiveAnnouncement(sent_ann);
-                    }
+                    BGP* peer_policy = peer->getBGPPolicy();
+                    if (peer_policy) peer_policy->receiveAnnouncement(sent_ann);
                 }
             }
         }
-        
-        // Step 2: ALL ASes process (all at once - prevents multi-hop)
+
+        // All ASes process simultaneously
         for (auto& pair : ases_) {
             AS* as = pair.second.get();
-            BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+            BGP* policy = as->getBGPPolicy();
             if (policy) {
                 policy->processReceivedAnnouncements(as->getASN());
                 policy->clearReceivedQueue();
             }
         }
-        
+
         std::cout << "  Propagated across peers" << std::endl;
     }
     
@@ -505,35 +446,27 @@ public:
      */
     void propagateDown() {
         std::cout << "\n=== Propagating DOWN (providers -> customers) ===" << std::endl;
-        
-        // Start at max rank and go down to 0
+
         for (int rank = max_rank_; rank >= 0; --rank) {
-            // Step 1: All ASes at this rank send to their customers
             for (AS* as : rank_structure_[rank]) {
-                BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+                BGP* policy = as->getBGPPolicy();
                 if (!policy) continue;
-                
-                auto announcements = policy->getAnnouncementsToSend();
-                
-                for (const auto& ann : announcements) {
+
+                for (const auto& [prefix, ann] : policy->getLocalRIB()) {
                     Announcement sent_ann = ann;
                     sent_ann.setNextHopASN(as->getASN());
-                    sent_ann.setReceivedFrom("provider");  // Customer receives from provider
-                    
-                    // Send to all customers
+                    sent_ann.setReceivedFrom(Relation::Provider);
+
                     for (AS* customer : as->getCustomers()) {
-                        BGP* customer_policy = dynamic_cast<BGP*>(customer->getPolicy());
-                        if (customer_policy) {
-                            customer_policy->receiveAnnouncement(sent_ann);
-                        }
+                        BGP* customer_policy = customer->getBGPPolicy();
+                        if (customer_policy) customer_policy->receiveAnnouncement(sent_ann);
                     }
                 }
             }
-            
-            // Step 2: Process at lower rank (if not at bottom)
+
             if (rank > 0) {
                 for (AS* as : rank_structure_[rank - 1]) {
-                    BGP* policy = dynamic_cast<BGP*>(as->getPolicy());
+                    BGP* policy = as->getBGPPolicy();
                     if (policy) {
                         policy->processReceivedAnnouncements(as->getASN());
                         policy->clearReceivedQueue();
@@ -541,7 +474,7 @@ public:
                 }
             }
         }
-        
+
         std::cout << "  Propagated through " << rank_structure_.size() << " ranks" << std::endl;
     }
     
@@ -582,7 +515,7 @@ public:
         }
         
         // Write CSV header
-        outfile << "asn,prefix,as_path" << std::endl;
+        outfile << "asn,prefix,as_path\n";
         
         // Iterate through all ASes
         size_t total_announcements = 0;
@@ -626,7 +559,7 @@ public:
 
                 outfile << asn << ","
                         << prefix << ","
-                        << path_stream.str() << std::endl;
+                        << path_stream.str() << '\n';
                 
                 total_announcements++;
             }
@@ -652,57 +585,39 @@ private:
     
     // Helper: Parse a single line from CAIDA file
     bool parseCAIDALine(const std::string& line) {
-        // Skip empty lines and comments
-        if (line.empty() || line[0] == '#') {
-            return true;
-        }
-        
-        std::istringstream iss(line);
-        std::string asn1_str, asn2_str, rel_str;
-        
-        // Parse the three fields separated by |
-        if (!std::getline(iss, asn1_str, '|')) return false;
-        if (!std::getline(iss, asn2_str, '|')) return false;
-        if (!std::getline(iss, rel_str, '|')) return false;
-        
-        // Ignore the 4th column (source) if it exists
-        
-        try {
-            uint32_t asn1 = std::stoul(asn1_str);
-            uint32_t asn2 = std::stoul(asn2_str);
-            int relationship = std::stoi(rel_str);
-            
-            // Get or create both ASes
-            AS* as1 = getOrCreateAS(asn1);
-            AS* as2 = getOrCreateAS(asn2);
-            
-            // CAIDA format: https://publicdata.caida.org/datasets/as-relationships/
-            // <provider-as>|<customer-as>|-1
-            // <peer-as>|<peer-as>|0|<source>
+        if (line.empty() || line[0] == '#') return true;
 
-            if (relationship == -1) {
-                // Provider-customer relationship
-                // asn1 is the PROVIDER, asn2 is the CUSTOMER
-                as1->addCustomer(as2);
-                as2->addProvider(as1);
-                
-            } else if (relationship == 0) {
-                // Peer-to-peer relationship (bidirectional)
-                as1->addPeer(as2);
-                as2->addPeer(as1);
-                
-            } else {
-                std::cerr << "Warning: Unknown relationship type " << relationship 
-                        << " for " << asn1 << "|" << asn2 << std::endl;
-                return false;
-            }
-            
-        } catch (const std::exception& e) {
-            std::cerr << "Error parsing line: " << line << std::endl;
-            std::cerr << "Exception: " << e.what() << std::endl;
+        // Manual char* parsing avoids constructing an istringstream per line,
+        // which matters when processing 100k+ line topology files.
+        const char* p = line.c_str();
+        char* end;
+
+        uint32_t asn1 = static_cast<uint32_t>(strtoul(p, &end, 10));
+        if (*end != '|') return false;
+        p = end + 1;
+
+        uint32_t asn2 = static_cast<uint32_t>(strtoul(p, &end, 10));
+        if (*end != '|') return false;
+        p = end + 1;
+
+        int relationship = static_cast<int>(strtol(p, &end, 10));
+        if (*end != '\0' && *end != '|' && *end != '\r' && *end != '\n') return false;
+
+        AS* as1 = getOrCreateAS(asn1);
+        AS* as2 = getOrCreateAS(asn2);
+
+        if (relationship == -1) {
+            as1->addCustomer(as2);
+            as2->addProvider(as1);
+        } else if (relationship == 0) {
+            as1->addPeer(as2);
+            as2->addPeer(as1);
+        } else {
+            std::cerr << "Warning: Unknown relationship type " << relationship
+                      << " for " << asn1 << "|" << asn2 << std::endl;
             return false;
         }
-        
+
         return true;
     }
     
