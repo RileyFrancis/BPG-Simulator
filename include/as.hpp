@@ -6,13 +6,8 @@
 #include <algorithm>
 #include "policy.hpp"
 
-// Forward declaration
 class Policy;
 
-/**
- * Autonomous System (AS) class
- * Represents a node in the internet graph with providers, customers, and peers
- */
 class AS {
 public:
     // Constructor
@@ -76,13 +71,13 @@ public:
     }
     
 private:
-    uint32_t asn_;                              // Autonomous System Number (unique ID)
-    int propagation_rank_;                      // Rank for graph flattening (-1 if unset)
+    uint32_t asn_;
+    int propagation_rank_;
     
-    std::vector<AS*> providers_;                // List of provider ASes
-    std::vector<AS*> customers_;                // List of customer ASes
-    std::vector<AS*> peers_;                    // List of peer ASes
+    std::vector<AS*> providers_;
+    std::vector<AS*> customers_;
+    std::vector<AS*> peers_;
     
-    std::unique_ptr<Policy> policy_;            // Routing policy (BGP or ROV)
-    BGP* bgp_policy_ = nullptr;                // Non-owning cache; avoids dynamic_cast in hot path
+    std::unique_ptr<Policy> policy_;
+    BGP* bgp_policy_ = nullptr;
 };

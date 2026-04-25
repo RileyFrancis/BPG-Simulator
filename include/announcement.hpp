@@ -99,6 +99,6 @@ private:
     std::string prefix_;
     std::vector<uint32_t> as_path_;
     uint32_t next_hop_asn_;
-    Relation received_from_;   // 1-byte enum, not a heap-allocated string
+    Relation received_from_;
     bool rov_invalid_;
 };

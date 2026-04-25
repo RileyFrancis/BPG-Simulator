@@ -5,65 +5,34 @@
 #include <vector>
 #include <string>
 
-/**
- * Abstract Policy class
- * Base class for routing policies (BGP, ROV, etc.)
- */
+
 class Policy {
 public:
     virtual ~Policy() = default;
-    
-    // Seed an announcement (for origin ASes that own the prefix)
     virtual void seedAnnouncement(const Announcement& ann) = 0;
-    
-    // Receive an announcement from a neighbor
     virtual void receiveAnnouncement(const Announcement& ann) = 0;
-    
-    // Process all received announcements and update local RIB
     virtual void processReceivedAnnouncements() = 0;
-    
-    // Get all announcements to send to neighbors
     virtual std::vector<Announcement> getAnnouncementsToSend() const = 0;
-    
-    // Get the local RIB (for output/inspection)
     virtual const std::unordered_map<std::string, Announcement>& getLocalRIB() const = 0;
-    
-    // Clear the received queue (used after processing)
     virtual void clearReceivedQueue() = 0;
 };
 
-/**
- * BGP Policy Implementation
- * Stores announcements in a local RIB and processes them according to BGP rules
- */
+
 class BGP : public Policy {
 public:
     BGP() = default;
     virtual ~BGP() = default;
-    
-    /**
-     * Seed an announcement (for origin ASes)
-     * Directly adds to local RIB without going through received queue
-     */
+
     void seedAnnouncement(const Announcement& ann) override {
         // Origin announcements go directly into local RIB
         local_rib_[ann.getPrefix()] = ann;
     }
-    
-    /**
-     * Receive an announcement from a neighbor
-     * Adds to received queue for later processing
-     */
+
     void receiveAnnouncement(const Announcement& ann) override {
         // Add to the received queue for this prefix
         received_queue_[ann.getPrefix()].push_back(ann);
     }
     
-    /**
-     * Process all received announcements WITH prepending
-     * For each prefix, select the best announcement and update local RIB
-     * @param asn The ASN of the AS that owns this policy (for prepending to AS path)
-     */
     void processReceivedAnnouncements(uint32_t asn) {
         // Process each prefix in the received queue
         for (auto& pair : received_queue_) {
@@ -102,11 +71,7 @@ public:
             }
         }
     }
-    
-    /**
-     * Process all received announcements WITHOUT prepending
-     * This is the base interface version for backward compatibility
-     */
+
     void processReceivedAnnouncements() override {
         // Process without prepending - used for testing
         for (auto& pair : received_queue_) {
@@ -135,10 +100,6 @@ public:
         }
     }
     
-    /**
-     * Get all announcements to send to neighbors
-     * Returns all announcements in the local RIB
-     */
     std::vector<Announcement> getAnnouncementsToSend() const override {
         std::vector<Announcement> announcements;
         announcements.reserve(local_rib_.size());
@@ -149,31 +110,16 @@ public:
         
         return announcements;
     }
-    
-    /**
-     * Get the local RIB
-     */
+
     const std::unordered_map<std::string, Announcement>& getLocalRIB() const override {
         return local_rib_;
     }
     
-    /**
-     * Clear the received queue
-     * Called after processing announcements
-     */
     void clearReceivedQueue() override {
         received_queue_.clear();
     }
     
 protected:
-    /**
-     * Select the best announcement between two announcements
-     *
-     * BGP Selection Rules (in order):
-     * 1. Prefer better relationship: origin > customer > peer > provider
-     * 2. Prefer shorter AS path
-     * 3. Prefer lower next hop ASN (tiebreaker)
-     */
     virtual Announcement selectBest(const Announcement& a, const Announcement& b) {
         // Rule 1: Compare relationships — enum values encode preference directly
         int a_pref = static_cast<int>(a.getRelation());
@@ -200,18 +146,11 @@ protected:
         }
     }
     
-    // Local RIB: prefix -> best announcement
     std::unordered_map<std::string, Announcement> local_rib_;
-
-    // Received queue: prefix -> list of received announcements
     std::unordered_map<std::string, std::vector<Announcement>> received_queue_;
 };
 
-/**
- * ROV (Route Origin Validation) Policy
- * Extends BGP by dropping any announcement marked rov_invalid before queuing it.
- * All other BGP logic (selection, propagation) is inherited unchanged.
- */
+
 class ROV : public BGP {
 public:
     ROV() = default;

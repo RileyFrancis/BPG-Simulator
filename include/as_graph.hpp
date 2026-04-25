@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <queue>
 #include "as.hpp"   
 
@@ -21,13 +22,15 @@ public:
     ASGraph() = default;
     ~ASGraph() = default;
     
-    // Build the graph from CAIDA topology file
     bool buildFromCAIDAFile(const std::string& filename) {
         std::ifstream file(filename);
     
-        if (!file.is_open()) {
-            std::cerr << "Error: Could not open file " << filename << std::endl;
-            return false;
+        try {
+            if (!file.is_open()) {
+                throw std::runtime_error("Error: Could not open file");
+            }
+        } catch(const std::exception& e) { 
+            return false; 
         }
         
         std::string line;
@@ -36,22 +39,24 @@ public:
         
         std::cout << "Reading CAIDA topology file: " << filename << std::endl;
         
-        while (std::getline(file, line)) {
-            line_num++;
-            
-            if (!parseCAIDALine(line)) {
-                errors++;
-                if (errors > 10) {
-                    std::cerr << "Too many errors, aborting." << std::endl;
-                    return false;
+        try {
+            while (std::getline(file, line)) {
+                line_num++;
+
+                if (!parseCAIDALine(line)) {
+                    errors++;
+                    if (errors > 10) {
+                        throw std::runtime_error("Too many errors, aborting.");
+                    }
+                }
+
+                if (line_num % 100000 == 0) {
+                    std::cout << "Processed " << line_num << " lines, "
+                            << ases_.size() << " ASes so far..." << std::endl;
                 }
             }
-            
-            // Progress indicator for large files
-            if (line_num % 100000 == 0) {
-                std::cout << "Processed " << line_num << " lines, "
-                        << ases_.size() << " ASes so far..." << std::endl;
-            }
+        } catch (const std::runtime_error&) {
+            return false;
         }
         
         file.close();
@@ -61,9 +66,12 @@ public:
         std::cout << "Total lines processed: " << line_num << std::endl;
         
         // Check for cycles
-        if (hasCycles()) {
-            std::cerr << "ERROR: Graph contains provider-customer cycles!" << std::endl;
-            return false;
+        try {
+            if (hasCycles()) {
+                throw std::runtime_error("ERROR: Graph contains provider-customer cycles!");
+            }
+        } catch(const std::exception& e) { 
+            return false; 
         }
         
         std::cout << "No cycles detected - graph is valid!" << std::endl;
@@ -87,7 +95,7 @@ public:
     
     // Check for cycles in provider-customer relationships
     bool hasCycles() const {
-        // visited: 0 = unvisited, 1 = visiting, 2 = visited
+        // in visited map,    0 = unvisited, 1 = visiting, 2 = visited
         std::unordered_map<uint32_t, int> visited;
         std::unordered_map<uint32_t, int> recursion_stack;
         
@@ -101,9 +109,13 @@ public:
         for (const auto& pair : ases_) {
             uint32_t asn = pair.first;
             
-            if (visited[asn] == 0) {  // Unvisited
-                if (hasCyclesDFS(asn, visited, recursion_stack)) {
-                    return true;  // Cycle found
+            if (visited[asn] == 0) {
+                try {
+                    if (hasCyclesDFS(asn, visited, recursion_stack)) {
+                        return true;
+                    }
+                } catch (const std::runtime_error&) {
+                    return true;
                 }
             }
         }
@@ -129,10 +141,9 @@ public:
         for (const auto& pair : ases_) {
             count += pair.second->getPeers().size();
         }
-        return count / 2;  // Each peer relationship counted twice
+        return count / 2;
     }
 
-    // Helper: Get or create an AS
     AS* getOrCreateAS(uint32_t asn) {
         auto it = ases_.find(asn);
         if (it != ases_.end()) {
@@ -153,11 +164,19 @@ public:
         size_t errors = 0;
         while (std::getline(stream, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (!parseCAIDALine(line)) {
+            try {
+                if (!parseCAIDALine(line)) {
+                    if (++errors > 10) return false;
+                }
+            } catch (const std::runtime_error&) {
                 if (++errors > 10) return false;
             }
         }
-        if (hasCycles()) return false;
+        try {
+            if (hasCycles()) return false;
+        } catch (const std::runtime_error&) {
+            return false;
+        }
         return true;
     }
 
@@ -190,11 +209,6 @@ public:
         return count > 0;
     }
 
-    /**
-     * Assign BGP or ROV policies to every AS in the graph.
-     * Must be called after buildFromCAIDAFile and before seeding/propagation.
-     * ASNs in rov_asns get ROV policy; all others get BGP.
-     */
     void initializePolicies(const std::unordered_set<uint32_t>& rov_asns = {}) {
         for (auto& pair : ases_) {
             uint32_t asn = pair.first;
@@ -207,15 +221,13 @@ public:
         }
     }
 
-    /**
-     * Seed announcements from a CSV file.
-     * Expected columns: seed_asn,prefix,rov_invalid
-     * Must be called after initializePolicies.
-     */
     bool seedFromCSV(const std::string& filename) {
         std::ifstream file(filename);
-        if (!file.is_open()) {
-            std::cerr << "Error: Could not open announcements file: " << filename << std::endl;
+        try {
+            if (!file.is_open()) {
+                throw std::runtime_error("Error: Could not open announcements file: " + filename);
+            }
+        } catch (const std::runtime_error&) {
             return false;
         }
 
@@ -225,39 +237,38 @@ public:
         size_t count = 0;
         while (std::getline(file, line)) {
             if (line.empty()) continue;
-
-            std::istringstream iss(line);
-            std::string asn_str, prefix, rov_str;
-
-            if (!std::getline(iss, asn_str, ',') ||
-                !std::getline(iss, prefix, ',') ||
-                !std::getline(iss, rov_str)) {
-                std::cerr << "Warning: malformed announcement line: " << line << std::endl;
-                continue;
-            }
-
-            // Strip trailing \r from Windows line endings
-            if (!rov_str.empty() && rov_str.back() == '\r') rov_str.pop_back();
-
             try {
-                uint32_t asn = std::stoul(asn_str);
-                bool rov_invalid = (rov_str == "True" || rov_str == "true" || rov_str == "1");
+                std::istringstream iss(line);
+                std::string asn_str, prefix, rov_str;
 
-                AS* as = getAS(asn);
-                if (!as) {
-                    std::cerr << "Warning: seed ASN " << asn << " not in graph, skipping" << std::endl;
-                    continue;
+                if (!std::getline(iss, asn_str, ',') ||
+                    !std::getline(iss, prefix, ',') ||
+                    !std::getline(iss, rov_str)) {
+                    throw std::runtime_error("Malformed announcement line: " + line);
                 }
-                Policy* policy = as->getPolicy();
-                if (!policy) {
-                    std::cerr << "Warning: AS " << asn << " has no policy, skipping" << std::endl;
-                    continue;
+
+                // Strip trailing \r from Windows line endings. grrr this makes me angry
+                if (!rov_str.empty() && rov_str.back() == '\r') rov_str.pop_back();
+
+                try {
+                    uint32_t asn = std::stoul(asn_str);
+                    bool rov_invalid = (rov_str == "True" || rov_str == "true" || rov_str == "1");
+
+                    AS* as = getAS(asn);
+                    if (!as) {
+                        throw std::runtime_error("Seed ASN " + std::to_string(asn) + " not in graph");
+                    }
+                    Policy* policy = as->getPolicy();
+                    if (!policy) {
+                        throw std::runtime_error("AS " + std::to_string(asn) + " has no policy");
+                    }
+                    policy->seedAnnouncement(Announcement(prefix, {asn}, asn, "origin", rov_invalid));
+                    count++;
+                } catch (const std::exception& e) {
+                    throw std::runtime_error("Failed to parse line: " + line + " (" + e.what() + ")");
                 }
-                policy->seedAnnouncement(Announcement(prefix, {asn}, asn, "origin", rov_invalid));
-                count++;
-            } catch (const std::exception& e) {
-                std::cerr << "Warning: failed to parse line: " << line
-                          << " (" << e.what() << ")" << std::endl;
+            } catch (const std::runtime_error&) {
+                continue;
             }
         }
 
@@ -266,19 +277,6 @@ public:
         return true;
     }
 
-    /**
-     * Flatten the graph by assigning propagation ranks
-     * 
-     * Algorithm from Section 3.3:
-     * 1. Find all ASes with no customers (rank 0 - the "edge" ASes)
-     * 2. For each AS at rank 0, assign all their providers rank 1
-     * 3. For each AS at rank 1, assign all their providers rank 2
-     * 4. Continue until all ASes have ranks (reaching ASes with no providers)
-     * 
-     * This creates a hierarchical structure where:
-     * - Rank 0: ASes with no customers (edges)
-     * - Higher ranks: Move up the provider chain
-     */
     void flattenGraph() {
         std::cout << "\nFlattening graph (assigning propagation ranks)..." << std::endl;
 
@@ -314,7 +312,6 @@ public:
         }
 
         // Single pass to build rank_structure_ from final rank assignments.
-        // Previously this was done twice (once during BFS, then discarded and rebuilt).
         int actual_max_rank = -1;
         for (const auto& pair : ases_) {
             actual_max_rank = std::max(actual_max_rank, pair.second->getPropagationRank());
@@ -334,14 +331,8 @@ public:
         for (const auto& pair : ases_) {
             if (pair.second->getPropagationRank() == -1) unranked++;
         }
-        if (unranked > 0) {
-            std::cerr << "Warning: " << unranked << " ASes have no rank!" << std::endl;
-        }
     }
     
-    /**
-     * Get all ASes at a specific propagation rank
-     */
     const std::vector<AS*>& getASesAtRank(int rank) const {
         static const std::vector<AS*> empty;
         if (rank < 0 || rank >= static_cast<int>(rank_structure_.size())) {
@@ -349,27 +340,17 @@ public:
         }
         return rank_structure_[rank];
     }
-    
-    /**
-     * Get the maximum propagation rank
-     */
+
     int getMaxPropagationRank() const {
         return max_rank_;
     }
     
-    /**
-     * Get the number of ranks
-     */
     size_t getNumRanks() const {
         return rank_structure_.size();
     }
     
-    /**
-     * Propagate announcements UP the provider chain (Section 3.5)
-     * Go from rank 0 up to max rank
-     */
     void propagateUp() {
-        std::cout << "\n=== Propagating UP (customers -> providers) ===" << std::endl;
+        std::cout << "\nPropagating UP (customers -> providers)" << std::endl;
 
         for (size_t rank = 0; rank < rank_structure_.size(); ++rank) {
             for (AS* as : rank_structure_[rank]) {
@@ -402,12 +383,9 @@ public:
         std::cout << "  Propagated through " << rank_structure_.size() << " ranks" << std::endl;
     }
     
-    /**
-     * Propagate announcements ACROSS to peers (Section 3.5)
-     * ONE HOP ONLY - valley-free routing
-     */
+
     void propagateAcross() {
-        std::cout << "\n=== Propagating ACROSS (peers -> peers, one hop only) ===" << std::endl;
+        std::cout << "\nPropagating ACROSS (peers -> peers, one hop only)" << std::endl;
 
         // All ASes send simultaneously (prevents multi-hop peer routes)
         for (auto& pair : ases_) {
@@ -445,7 +423,7 @@ public:
      * Go from max rank down to rank 0
      */
     void propagateDown() {
-        std::cout << "\n=== Propagating DOWN (providers -> customers) ===" << std::endl;
+        std::cout << "\nPropagating DOWN (providers -> customers)" << std::endl;
 
         for (int rank = max_rank_; rank >= 0; --rank) {
             for (AS* as : rank_structure_[rank]) {
@@ -478,39 +456,22 @@ public:
         std::cout << "  Propagated through " << rank_structure_.size() << " ranks" << std::endl;
     }
     
-    /**
-     * Full propagation: UP -> ACROSS -> DOWN (Sections 3.5 & 3.6)
-     * This is the complete BGP announcement propagation
-     */
     void propagateAnnouncements() {
-        std::cout << "\n========================================" << std::endl;
         std::cout << "Starting BGP Announcement Propagation" << std::endl;
-        std::cout << "========================================" << std::endl;
-        
         propagateUp();
         propagateAcross();
         propagateDown();
-        
-        std::cout << "\n========================================" << std::endl;
         std::cout << "Propagation Complete!" << std::endl;
-        std::cout << "========================================" << std::endl;
     }
     
-    /**
-     * Output the routing tables to a CSV file (Section 3.7)
-     * Format: asn,prefix,as_path
-     * 
-     * This dumps the local RIB of every AS to a CSV file that Cloudflare
-     * can use to optimize their routing decisions.
-     * 
-     * @param filename Output CSV filename
-     * @return true if successful, false otherwise
-     */
     bool outputToCSV(const std::string& filename) {
         std::ofstream outfile(filename);
         
-        if (!outfile.is_open()) {
-            std::cerr << "Error: Could not open output file " << filename << std::endl;
+        try {
+            if (!outfile.is_open()) {
+                throw std::runtime_error("Error: Could not open output file " + filename);
+            }
+        } catch (const std::runtime_error&) {
             return false;
         }
         
@@ -574,21 +535,14 @@ public:
     }
     
 private:
-    // Storage for all AS objects (ASN -> AS object)
     std::unordered_map<uint32_t, std::unique_ptr<AS>> ases_;
-    
-    // Flattened graph structure: rank -> vector of ASes at that rank
     std::vector<std::vector<AS*>> rank_structure_;
     
-    // Maximum rank in the graph
     int max_rank_ = -1;
     
-    // Helper: Parse a single line from CAIDA file
     bool parseCAIDALine(const std::string& line) {
         if (line.empty() || line[0] == '#') return true;
 
-        // Manual char* parsing avoids constructing an istringstream per line,
-        // which matters when processing 100k+ line topology files.
         const char* p = line.c_str();
         char* end;
 
@@ -613,9 +567,8 @@ private:
             as1->addPeer(as2);
             as2->addPeer(as1);
         } else {
-            std::cerr << "Warning: Unknown relationship type " << relationship
-                      << " for " << asn1 << "|" << asn2 << std::endl;
-            return false;
+            throw std::runtime_error("Unknown relationship type " + std::to_string(relationship) +
+                " for " + std::to_string(asn1) + "|" + std::to_string(asn2));
         }
 
         return true;
@@ -643,9 +596,8 @@ private:
                 }
             } else if (recursion_stack[provider_asn] == 1) {
                 // Back edge found - cycle detected!
-                std::cerr << "Cycle detected involving AS " << asn 
-                        << " -> " << provider_asn << std::endl;
-                return true;
+                throw std::runtime_error("Cycle detected involving AS " + std::to_string(asn) +
+                    " -> " + std::to_string(provider_asn));
             }
         }
         
