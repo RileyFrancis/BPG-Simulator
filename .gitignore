@@ -3,4 +3,4 @@ build/
 output/
 *.pdf
 *.zip
-claude/
+.claude/
