@@ -469,7 +469,7 @@ let lastTargetAsn = null;
 let visNetwork      = null;
 let showAll         = false;
 let physicsEnabled  = false;
-const MAX_IRRELEVANT = 400;   // cap irrelevant nodes to keep vis.js responsive
+const MAX_IRRELEVANT = 300;   // cap irrelevant nodes to keep vis.js responsive
 
 // Topology cache — avoid re-parsing the same file on every buildGraph call
 let cachedTopo     = null;
@@ -536,11 +536,18 @@ function setHint(id, msg, cls) {
 
 document.getElementById('caida-file').addEventListener('change', async function() {
   const f = this.files[0]; if (!f) return;
-  caidaContent = await readFile(f);
-  cachedTopo = cachedTopoKey = cachedRanks = cachedRanksKey = null;
+  caidaContent  = await readFile(f);
+  cachedTopo    = parseCaida(caidaContent);
+  cachedTopoKey = caidaContent;
+  cachedRanks   = cachedRanksKey = null;
   document.querySelectorAll('.btn-preset').forEach(b => b.classList.remove('active'));
-  document.getElementById('anns-rows').innerHTML = ''; // clear rows when topology changes
-  setHint('caida-hint', `✓ ${f.name}  (${fmtBytes(f.size)})`, 'ok');
+  document.getElementById('anns-rows').innerHTML = '';
+  const nc   = cachedTopo.nodes.size;
+  const warn = nc > 1000;
+  setHint('caida-hint',
+    `✓ ${f.name}  (${fmtBytes(f.size)}, ${nc} ASes)` +
+    (warn ? ' · ⚠ Warning! Performance may suffer on large topology files.' : ''),
+    warn ? 'warn' : 'ok');
 });
 document.getElementById('anns-file').addEventListener('change', async function() {
   const f = this.files[0]; if (!f) return;
@@ -626,14 +633,21 @@ async function loadPreset(type) {
       fetch(cfg.rov).then(r => r.text()),
     ]);
 
-    caidaContent = caida;
-    cachedTopo = cachedTopoKey = cachedRanks = cachedRanksKey = null;
+    caidaContent  = caida;
+    cachedTopo    = parseCaida(caidaContent);
+    cachedTopoKey = caidaContent;
+    cachedRanks   = cachedRanksKey = null;
     parseAnnsCSVtoRows(anns);
 
-    document.getElementById('rov-asns').value       = rov.trim();
-    document.getElementById('target-asn').value     = cfg.targetAsn;
-    setHint('caida-hint', `✓ ${cfg.label} topology loaded`, 'ok');
-    setHint('anns-hint',  `✓ ${cfg.label} announcements loaded`, 'ok');
+    document.getElementById('rov-asns').value   = rov.trim();
+    document.getElementById('target-asn').value = cfg.targetAsn;
+    const nc   = cachedTopo.nodes.size;
+    const warn = nc > 1000;
+    setHint('caida-hint',
+      `✓ ${cfg.label} topology loaded (${nc} ASes)` +
+      (warn ? ' · ⚠ Warning! Performance may suffer on large topology files.' : ''),
+      warn ? 'warn' : 'ok');
+    setHint('anns-hint', `✓ ${cfg.label} announcements loaded`, 'ok');
 
     prog.style.display = 'none';
     document.querySelectorAll('.btn-preset').forEach(b => { b.disabled = false; b.classList.remove('active'); });
