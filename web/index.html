@@ -410,6 +410,11 @@
           <span class="toggle-switch"></span>
           Show all nodes
         </label>
+        <label class="toggle-wrap" title="Enable or disable physics simulation">
+          <input type="checkbox" id="toggle-physics" onchange="onTogglePhysics()" />
+          <span class="toggle-switch"></span>
+          Physics
+        </label>
         <button class="btn-sm" onclick="resetLayout()">↺ Reset layout</button>
         <span id="graph-info" class="route-count"></span>
       </div>
@@ -461,8 +466,9 @@ let lastResults   = null;
 let lastTargetAsn = null;
 
 // Graph state
-let visNetwork    = null;
-let showAll       = false;
+let visNetwork      = null;
+let showAll         = false;
+let physicsEnabled  = false;
 const MAX_IRRELEVANT = 400;   // cap irrelevant nodes to keep vis.js responsive
 
 // Topology cache — avoid re-parsing the same file on every buildGraph call
@@ -1128,7 +1134,7 @@ function buildGraph(routes, targetAsn) {
   // Once the layout has settled, kill physics so its RAF loop stops running.
   // After this point only our particle tick drives redraws, which is far cheaper.
   visNetwork.once('stabilizationIterationsDone', () => {
-    visNetwork.setOptions({ physics: { enabled: false } });
+    if (!physicsEnabled) visNetwork.setOptions({ physics: { enabled: false } });
     startParticles(routes);
   });
 }
@@ -1136,6 +1142,13 @@ function buildGraph(routes, targetAsn) {
 function onToggleAll() {
   showAll = document.getElementById('toggle-all').checked;
   if (lastResults) buildGraph(lastResults, lastTargetAsn);
+}
+
+function onTogglePhysics() {
+  physicsEnabled = document.getElementById('toggle-physics').checked;
+  if (!visNetwork) return;
+  visNetwork.setOptions({ physics: { enabled: physicsEnabled } });
+  if (!physicsEnabled && lastResults) startParticles(lastResults);
 }
 
 function resetLayout() {
@@ -1146,7 +1159,7 @@ function resetLayout() {
     physics: { enabled: true, stabilization: { iterations: nodeCount > 400 ? 80 : 300 } }
   });
   visNetwork.once('stabilizationIterationsDone', () => {
-    visNetwork.setOptions({ physics: { enabled: false } });
+    if (!physicsEnabled) visNetwork.setOptions({ physics: { enabled: false } });
     if (lastResults) startParticles(lastResults);
   });
   visNetwork.stabilize();
