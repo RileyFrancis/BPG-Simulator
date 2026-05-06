@@ -831,36 +831,35 @@ function computeRanks(topoNodes, topoEdges) {
 // ─────────────────────────────────────────────────────────────
 let particles   = [];
 let particleRaf = null;
+const PARTICLE_R = 3.5;
 
 function renderParticles(ctx) {
   if (!visNetwork || !particles.length) return;
-  const pos   = visNetwork.getPositions();
-  const edges = visNetwork.body.edges;
-  ctx.save();
+  const pos = visNetwork.getPositions();
+
+  // Collect x/y for each color bucket (blue = normal, yellow = rov-invalid)
+  const blue = [], yellow = [];
   for (const p of particles) {
-    const fp = pos[p.from];
-    const tp = pos[p.to];
+    const fp = pos[p.from], tp = pos[p.to];
     if (!fp || !tp) continue;
+    const arr = p.color === '#58a6ff' ? blue : yellow;
+    arr.push(fp.x + (tp.x - fp.x) * p.t, fp.y + (tp.y - fp.y) * p.t);
+  }
 
-    const edge = p.eid !== undefined ? edges[p.eid] : null;
-    let x, y;
-    if (edge && edge.via) {
-      const vx = edge.via.x, vy = edge.via.y;
-      const t = p.t, mt = 1 - t;
-      x = mt*mt*fp.x + 2*mt*t*vx + t*t*tp.x;
-      y = mt*mt*fp.y + 2*mt*t*vy + t*t*tp.y;
-    } else {
-      x = fp.x + (tp.x - fp.x) * p.t;
-      y = fp.y + (tp.y - fp.y) * p.t;
-    }
-
+  ctx.save();
+  function drawBatch(pts, color) {
+    if (!pts.length) return;
     ctx.beginPath();
-    ctx.arc(x, y, p.r, 0, Math.PI * 2);
-    ctx.fillStyle   = p.color;
-    ctx.shadowColor = p.color;
-    ctx.shadowBlur  = 8;
+    for (let i = 0; i < pts.length; i += 2) {
+      ctx.moveTo(pts[i] + PARTICLE_R, pts[i + 1]);
+      ctx.arc(pts[i], pts[i + 1], PARTICLE_R, 0, Math.PI * 2);
+    }
+    ctx.fillStyle = ctx.shadowColor = color;
+    ctx.shadowBlur = 8;
     ctx.fill();
   }
+  drawBatch(blue,   '#58a6ff');
+  drawBatch(yellow, '#e3b341');
   ctx.restore();
 }
 
@@ -868,24 +867,14 @@ function startParticles(routes) {
   stopParticles();
   if (!routes.length || !visNetwork) return;
 
-  const bodyEdgeMap = new Map();
-  for (const eid in visNetwork.body.edges) {
-    const be = visNetwork.body.edges[eid];
-    bodyEdgeMap.set(`${be.fromId}_${be.toId}`, eid);
-    bodyEdgeMap.set(`${be.toId}_${be.fromId}`, eid);
-  }
-
   for (const route of routes) {
     const path  = route.as_path;
     const color = route.rov_invalid ? '#e3b341' : '#58a6ff';
-    const r     = 3.5;
     for (let i = 0; i < path.length - 1; i++) {
-      const from  = path[i + 1];
-      const to    = path[i];
-      const eid   = bodyEdgeMap.get(`${from}_${to}`);
+      const from  = path[i + 1], to = path[i];
       const speed = 0.004 + Math.random() * 0.0015;
       for (let k = 0; k < 3; k++) {
-        particles.push({ from, to, t: k / 3, speed, color, r, eid });
+        particles.push({ from, to, t: k / 3, speed, color });
       }
     }
   }
@@ -1041,10 +1030,7 @@ function buildGraph(routes, targetAsn) {
       width: onPath ? 2.5 : 1,
       dashes: isPeer,
       arrows: isPeer ? undefined : { to: { enabled: true, scaleFactor: 0.6 } },
-      // Path edges stay dynamic (particles follow their bezier curves);
-      // off-path edges use straight lines, which eliminates their via-nodes
-      // from the physics simulation and speeds up both layout and rendering.
-      smooth: onPath ? { type: 'dynamic' } : false,
+      smooth: false,
     });
   }
 
@@ -1101,7 +1087,7 @@ function buildGraph(routes, targetAsn) {
         dragView: true,
       },
       nodes: { shape: 'dot' },
-      edges: { smooth: { type: 'dynamic' } },
+      edges: { smooth: false },
     }
   );
 
